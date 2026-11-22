@@ -7,7 +7,7 @@ export function FormatBanner() {
         <path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#C8AA6E" />
       </svg>
       <p className="text-center font-display text-[11px] font-semibold tracking-[0.14em] text-gold-pale sm:text-[13px]">
-        Constructed Format: Commander Legal Pool Only
+        Open Pool: Any Paper Card, Banned Ones Included
       </p>
       <svg viewBox="0 0 12 12" width={10} height={10} aria-hidden="true">
         <path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#C8AA6E" />

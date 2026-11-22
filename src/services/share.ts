@@ -21,7 +21,7 @@ export function buildDailyShareText(options: {
   const grid = answers.map(answerEmoji).join('');
   const best = answers.reduce<AnswerRecord | null>((top, a) => (a.points > (top?.points ?? -1) ? a : top), null);
   const lines = [
-    `Magillion #${puzzleNumber}: ${total.toLocaleString('en-US')} / 5,000`,
+    `Magillion #${puzzleNumber}: ${total.toLocaleString('en-US')} pts`,
     grid,
     answers.map((a) => a.points.toLocaleString('en-US')).join(' + '),
   ];

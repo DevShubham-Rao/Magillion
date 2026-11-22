@@ -256,11 +256,18 @@ export const QUESTION_POOL: readonly QuestionDefinition[] = [
     id: 'commander-legal',
     prompt: 'Name a Commander-legal card.',
     shortLabel: 'Commander-legal card',
-    hint: 'Anything you could put in a 100-card Commander deck. Banned and Un-cards are turned away.',
+    hint: "Anything you could put in a 100-card Commander deck. Cards on Commander's banned list don't count here.",
     category: 'format',
     status: 'active',
     scryfallQueryHint: 'f:commander',
-    validatorFn: () => ({ ok: true }),
+    validatorFn: (card) => {
+      const status = card.legalities.commander ?? 'not_legal';
+      if (status === 'legal') return { ok: true };
+      if (status === 'banned') {
+        return fail('Banned in Commander', `${card.name} is on Commander's banned list, so it can't go in a Commander deck.`);
+      }
+      return fail('Not legal in Commander', `${card.name} isn't legal in Commander.`);
+    },
   },
   typeQuestion({
     id: 'enchantment',
@@ -311,7 +318,8 @@ export const QUESTION_POOL: readonly QuestionDefinition[] = [
     hint: 'Look for “cost: effect”, like {T}: Add {G}. Keyword costs such as Equip and Cycling count; reminder text alone doesn’t.',
     category: 'mechanic',
     status: 'active',
-    scryfallQueryHint: 'o:":"',
+    // A superset of valid answers: colon costs plus keywords whose cost lives in reminder text.
+    scryfallQueryHint: `(o:":" or ${ACTIVATED_KEYWORDS.map((k) => `o:"${k.toLowerCase()}"`).join(' or ')} or o:cycling)`,
     validatorFn: (card) => {
       for (const face of getFaces(card)) {
         if (faceHasActivatedAbility(face)) return pass(card, face);

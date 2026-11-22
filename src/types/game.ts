@@ -2,7 +2,7 @@ import type { QuestionDefinition, RarityTierId, ScoreResult, ScryfallCard } from
 
 export type GameMode = 'daily' | 'practice';
 
-export type GameView = 'question' | 'reveal' | 'summary';
+export type GameView = 'ready' | 'question' | 'reveal' | 'lost' | 'summary';
 
 /** The slice of a Scryfall card we persist with an answer. */
 export interface AnsweredCardSnapshot {
@@ -18,16 +18,33 @@ export interface AnsweredCardSnapshot {
   setName: string;
 }
 
+/** How a round ended. Only `answered` scores points. */
+export type AnswerStatus = 'answered' | 'passed' | 'timeout' | 'out-of-attempts';
+
 export interface AnswerRecord {
   round: number;
   questionId: string;
-  status: 'answered' | 'passed';
+  status: AnswerStatus;
   card: AnsweredCardSnapshot | null;
+  /** Total for the round: obscurity points plus speed bonus. */
   points: number;
+  /** Obscurity points alone; this decides the tier. */
+  basePoints?: number;
+  speedBonus?: number;
   tierId: RarityTierId | null;
   edhrecRank: number | null;
   matchedFace?: string;
+  /** What the player typed, when it was completed or corrected. */
+  typed?: string;
   answeredAt: string;
+}
+
+/** The round in progress, persisted so a reload can't reset the clock. */
+export interface RoundState {
+  round: number;
+  /** Epoch ms when time runs out. */
+  deadline: number;
+  wrongAttempts: number;
 }
 
 export interface DailyRecord {
@@ -37,6 +54,7 @@ export interface DailyRecord {
   answers: AnswerRecord[];
   completedAt: string | null;
   totalScore: number;
+  roundState?: RoundState | null;
 }
 
 export interface PlayerStats {
@@ -82,6 +100,11 @@ export interface Rejection {
   reason: string;
   cardName?: string;
   cardArt?: string;
+  /** The card the typed text was completed or corrected into. */
+  readAs?: string;
+  /** Whether this rejection used up one of the round's attempts. */
+  costAttempt: boolean;
+  attemptsLeft: number;
 }
 
 export interface RevealState {
@@ -89,6 +112,15 @@ export interface RevealState {
   score: ScoreResult;
   question: QuestionDefinition;
   answer: AnswerRecord;
-  /** Validator note, e.g. which face satisfied the prompt. */
-  validationNote?: string;
+  /** Completion, correction or face notes. */
+  notes: string[];
+}
+
+/** A round that ended without an answer. */
+export interface RoundLoss {
+  reason: 'timeout' | 'out-of-attempts';
+  question: QuestionDefinition;
+  answer: AnswerRecord;
+  /** The final wrong answer, when attempts ran out. */
+  lastRejection?: { title: string; reason: string; cardName?: string; readAs?: string };
 }

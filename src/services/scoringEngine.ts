@@ -7,9 +7,11 @@ import type {
   ScoreResult,
   ScryfallCard,
 } from '../types/mtg';
+import { METAGAME_FORMATS, METAGAME_FORMAT_NAMES, type MetagameFormat } from '../types/metagame';
 import { tierForPoints } from '../data/rarityTiers';
 import { getOracleId, splitTypeLine } from '../lib/cardFaces';
 import { daysBetween, utcDateKey } from '../lib/dates';
+import type { MetagameIndex } from './metagame';
 
 /**
  * ScoringEngine
@@ -18,17 +20,20 @@ import { daysBetween, utcDateKey } from '../lib/dates';
  * Turns "how much is this card played?" into points, independent of any UI.
  *
  *   card ──► CrossFormatAggregator ──► FormatPopularityProvider(s)
- *                    │                     └─ v1: EDHREC rank via Scryfall
+ *                    │                     ├─ Commander: EDHREC rank via Scryfall
+ *                    │                     └─ Standard, Pioneer, Modern, Legacy,
+ *                    │                        Vintage, Pauper: share of recent
+ *                    │                        Magic Online decks
  *                    ▼
  *         effective obscurity (0–1) ──► points (50–1,000) ──► rarity tier
  *
- * Providers normalise their raw data (ranks, deck counts, metagame share) to
- * a 0–1 popularity for one format. The aggregator combines formats with a
- * strategy, and the engine maps the result onto the points curve.
+ * Every provider ends up on one scale, an EDHREC-equivalent rank fed through
+ * one curve, and a card counts only as obscure as it is in its most-played
+ * format.
  */
 
 /* ------------------------------------------------------------------------ */
-/* v1: the EDHREC rank curve                                                 */
+/* The EDHREC rank curve                                                     */
 /* ------------------------------------------------------------------------ */
 
 export interface EdhrecCurveConfig {
@@ -48,11 +53,16 @@ export interface EdhrecCurveConfig {
   freshWindowDays: number;
 }
 
+/**
+ * About 32,700 cards carry an EDHREC rank, and the back half is mostly
+ * draft filler nobody remembers. The ceiling sits at #20,000 so a real deep
+ * cut can reach the top tier without needing to know the filler.
+ */
 export const DEFAULT_EDHREC_CURVE: EdhrecCurveConfig = {
   floorPoints: 50,
   ceilingPoints: 1000,
-  ceilingRank: 25_000,
-  knee: 4_000,
+  ceilingRank: 20_000,
+  knee: 1_800,
   provisionalRank: 6_000,
   freshWindowDays: 45,
 };
@@ -62,12 +72,12 @@ export const DEFAULT_EDHREC_CURVE: EdhrecCurveConfig = {
  *
  *   obscurity(r) = ln(1 + (r − 1) / knee) / ln(1 + (R − 1) / knee)
  *
- * With knee 4,000 and R 25,000 this gives, for example:
- *   #1 → 50 · #1,000 → 157 · #3,234 → 334 · #4,294 → 400
- *   #9,451 → 632 · #13,306 → 752 · #20,000 → 909 · #24,000 → 983
+ * With knee 1,800 and R 20,000 this gives, for example:
+ *   #1 → 50 · #1,000 → 218 · #3,234 → 442 · #4,294 → 514
+ *   #9,451 → 748 · #13,306 → 860 · #15,000 → 901 · #20,000+ → 1,000
  *
- * Tier thresholds land near ranks 940 (Uncommon), 3,500 (Rare),
- * 8,600 (Mythic), 17,200 (Timeshifted) and 23,600 (Serialized).
+ * Tier thresholds land near ranks 545 (Uncommon), 2,160 (Rare),
+ * 5,840 (Mythic), 12,900 (Timeshifted) and 18,650 (Serialized).
  */
 export function edhrecRankToObscurity(
   rank: number | null | undefined,
@@ -87,6 +97,122 @@ export function obscurityToPoints(obscurity: number, curve: EdhrecCurveConfig = 
 
 export function pointsForEdhrecRank(rank: number | null, curve: EdhrecCurveConfig = DEFAULT_EDHREC_CURVE): number {
   return obscurityToPoints(edhrecRankToObscurity(rank, curve), curve);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Ranks the curve is fed                                                    */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Scryfall drops the EDHREC rank of anything banned in Commander. Cards are
+ * banned for being everywhere, so one that's still legal or restricted in
+ * Vintage counts as this rank (an Uncommon Pick) instead of unranked.
+ * Ante and dexterity cards, banned in Vintage too, get no such floor.
+ */
+export const BANNED_IN_COMMANDER_RANK = 1_000;
+
+const isBasicLand = (card: ScryfallCard) => /\bBasic\b/.test(splitTypeLine(card.type_line).types);
+
+export interface EffectiveEdhrecRank {
+  rank: number | null;
+  reason: 'ranked' | 'basic' | 'banned' | 'unranked';
+  /** Why the rank differs from Scryfall's, when it does. */
+  note?: string;
+}
+
+export function effectiveEdhrecRank(card: ScryfallCard): EffectiveEdhrecRank {
+  if (isBasicLand(card)) {
+    return {
+      rank: 1,
+      reason: 'basic',
+      note: "EDHREC doesn't rank basic lands, but nearly every deck runs them, so they count as #1.",
+    };
+  }
+  if (card.edhrec_rank != null) return { rank: card.edhrec_rank, reason: 'ranked' };
+  const vintage = card.legalities.vintage;
+  if (card.legalities.commander === 'banned' && (vintage === 'legal' || vintage === 'restricted')) {
+    return {
+      rank: BANNED_IN_COMMANDER_RANK,
+      reason: 'banned',
+      note: `Banned in Commander, so EDHREC has no rank for it. Banned cards are infamous, so it counts as Commander rank #${BANNED_IN_COMMANDER_RANK.toLocaleString('en-US')}.`,
+    };
+  }
+  return { rank: null, reason: 'unranked' };
+}
+
+export interface ShareAnchor {
+  share: number;
+  rank: number;
+}
+
+export interface MetagameCurveConfig {
+  /**
+   * Two points the share → rank power law passes through. With the
+   * defaults, a card in a quarter of a format's decks is as well known as
+   * EDHREC #300, and one in 1% of decks as EDHREC #4,000.
+   */
+  anchors: readonly [ShareAnchor, ShareAnchor];
+  /**
+   * How widely each format's staples are known compared with Commander's.
+   * The equivalent rank is divided by this, so smaller formats count for a
+   * little less.
+   */
+  reach: Record<MetagameFormat, number>;
+}
+
+export const DEFAULT_METAGAME_CURVE: MetagameCurveConfig = {
+  anchors: [
+    { share: 0.25, rank: 300 },
+    { share: 0.01, rank: 4_000 },
+  ],
+  reach: { modern: 0.9, legacy: 0.85, pioneer: 0.85, standard: 0.8, vintage: 0.75, pauper: 0.7 },
+};
+
+/**
+ * EDHREC-equivalent rank for a 60-card deck share.
+ *
+ *   rank(s) = r₁ × (s₁ / s)^k / reach,   k = ln(r₂ / r₁) / ln(s₁ / s₂)
+ *
+ * In Modern (reach 0.9): 40% → #228 (95 pts), 25% → #333 (114),
+ * 5% → #1,217 (247), 1% → #4,444 (524), 0.3% → #11,711 (818),
+ * 0.15% → past #20,000 (1,000, no effect).
+ */
+export function shareToEquivalentRank(
+  share: number,
+  format: MetagameFormat,
+  curve: MetagameCurveConfig = DEFAULT_METAGAME_CURVE,
+): number {
+  const [a, b] = curve.anchors;
+  const k = Math.log(b.rank / a.rank) / Math.log(a.share / b.share);
+  const rank = a.rank * Math.pow(a.share / Math.max(share, 1e-6), k);
+  return Math.max(1, Math.round(rank / curve.reach[format]));
+}
+
+export function isMetagameFormat(format: Format): format is MetagameFormat {
+  return (METAGAME_FORMATS as readonly string[]).includes(format);
+}
+
+/**
+ * Synchronous best guess at a card's obscurity, for ordering candidates
+ * (which "urza" is the most played?). Same math as `ScoringEngine.score`,
+ * minus the fresh-card adjustment, which needs a network lookup.
+ */
+export function estimateObscurity(
+  card: ScryfallCard,
+  metagame: MetagameIndex | null,
+  curve: EdhrecCurveConfig = DEFAULT_EDHREC_CURVE,
+  metagameCurve: MetagameCurveConfig = DEFAULT_METAGAME_CURVE,
+): number {
+  let obscurity = edhrecRankToObscurity(effectiveEdhrecRank(card).rank, curve);
+  if (!metagame) return obscurity;
+  const oracleId = getOracleId(card);
+  for (const format of metagame.formats) {
+    const entry = metagame.lookup(oracleId, format);
+    if (!entry) continue;
+    const rank = shareToEquivalentRank(entry.share, format, metagameCurve);
+    obscurity = Math.min(obscurity, edhrecRankToObscurity(rank, curve));
+  }
+  return obscurity;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -116,14 +242,12 @@ function fromObscurity(
 }
 
 /**
- * v1 provider: Commander popularity from the `edhrec_rank` Scryfall embeds
- * in every card object (#1 = the most-played card on EDHREC).
+ * Commander popularity from the `edhrec_rank` Scryfall embeds in every card
+ * object (#1 = the most-played card on EDHREC), corrected by
+ * `effectiveEdhrecRank` for basic lands and cards banned in Commander.
  *
- * Two corrections keep the daily game fair:
- *  - Basic lands are excluded from EDHREC rankings but appear in nearly every
- *    deck, so they count as rank #1 rather than "unranked".
- *  - Cards whose first printing is under `freshWindowDays` old haven't been
- *    measured yet. They score as `provisionalRank` until EDHREC catches up.
+ * Cards whose first printing is under `freshWindowDays` old haven't been
+ * measured yet. They score as `provisionalRank` until EDHREC catches up.
  */
 export class EdhrecPopularityProvider implements FormatPopularityProvider {
   readonly id = 'edhrec-scryfall';
@@ -145,50 +269,93 @@ export class EdhrecPopularityProvider implements FormatPopularityProvider {
     const card = await this.source.getCardByOracleId(oracleId);
     if (!card) return unavailable(format, this.label, 'Card not found on Scryfall.');
 
-    if (/\bBasic\b/.test(splitTypeLine(card.type_line).types)) {
-      return fromObscurity(
-        format,
-        this.label,
-        null,
-        0,
-        'measured',
-        "EDHREC doesn't rank basic lands, but nearly every deck runs them, so they count as #1.",
-      );
-    }
-
+    const effective = effectiveEdhrecRank(card);
     const rank = card.edhrec_rank ?? null;
+    const measured = (scoredRank: number | null, note?: string): NormalizedPopularity => ({
+      ...fromObscurity(format, this.label, rank, edhrecRankToObscurity(scoredRank, this.curve), 'measured', note),
+      scoredRank,
+    });
+    if (effective.reason === 'basic') return measured(1, effective.note);
+
     const today = this.today();
     const printAge = daysBetween(card.released_at, today);
-
     if (printAge >= 0 && printAge <= this.curve.freshWindowDays) {
       const firstPrint = (await this.source.getFirstPrintReleaseDate(oracleId)) ?? card.released_at;
       const age = daysBetween(firstPrint, today);
       if (age >= 0 && age <= this.curve.freshWindowDays && (rank === null || rank > this.curve.provisionalRank)) {
-        return fromObscurity(
-          format,
-          this.label,
-          rank,
-          edhrecRankToObscurity(this.curve.provisionalRank, this.curve),
-          'provisional',
-          `First printed ${age} day${age === 1 ? '' : 's'} ago, so EDHREC is still counting decks. Scored as rank #${this.curve.provisionalRank.toLocaleString('en-US')} for now.`,
-        );
+        return {
+          ...fromObscurity(
+            format,
+            this.label,
+            rank,
+            edhrecRankToObscurity(this.curve.provisionalRank, this.curve),
+            'provisional',
+            `First printed ${age} day${age === 1 ? '' : 's'} ago, so EDHREC is still counting decks. Scored as rank #${this.curve.provisionalRank.toLocaleString('en-US')} for now.`,
+          ),
+          scoredRank: this.curve.provisionalRank,
+        };
       }
     }
 
-    if (rank === null) {
-      return fromObscurity(format, this.label, null, 1, 'measured', 'No EDHREC decklist runs this card.');
+    return measured(effective.rank, effective.note);
+  }
+}
+
+/**
+ * 60-card popularity: the share of recent Magic Online decks (league 5-0s
+ * and challenge top finishes) that run a card, converted to an EDHREC-
+ * equivalent rank by `shareToEquivalentRank`. Cards in no recent deck count
+ * as unplayed in that format. If the snapshot can't load, every format
+ * reports `unavailable` and scoring falls back to Commander alone.
+ */
+export class MetagamePopularityProvider implements FormatPopularityProvider {
+  readonly id = 'mtgo-decklists';
+  readonly label = 'Magic Online decklists';
+  readonly formats = METAGAME_FORMATS;
+
+  private readonly load: () => Promise<MetagameIndex | null>;
+  private readonly curve: MetagameCurveConfig;
+  private readonly edhrecCurve: EdhrecCurveConfig;
+
+  constructor(
+    load: () => Promise<MetagameIndex | null>,
+    curve: MetagameCurveConfig = DEFAULT_METAGAME_CURVE,
+    edhrecCurve: EdhrecCurveConfig = DEFAULT_EDHREC_CURVE,
+  ) {
+    this.load = load;
+    this.curve = curve;
+    this.edhrecCurve = edhrecCurve;
+  }
+
+  async getCardPopularity(oracleId: string, format: Format): Promise<NormalizedPopularity> {
+    if (!isMetagameFormat(format)) return unavailable(format, this.label);
+    const index = await this.load();
+    if (!index) {
+      return unavailable(format, this.label, "Recent 60-card decklists didn't load, so this score uses Commander play only.");
     }
-    return fromObscurity(format, this.label, rank, edhrecRankToObscurity(rank, this.curve), 'measured');
+    if (!index.has(format)) return unavailable(format, this.label);
+    const sampleSize = index.snapshot.formats[format]?.decks ?? 0;
+    const entry = index.lookup(oracleId, format);
+    if (!entry) {
+      return { ...fromObscurity(format, this.label, null, 1, 'measured'), scoredRank: null, share: 0, sampleSize };
+    }
+    const scoredRank = shareToEquivalentRank(entry.share, format, this.curve);
+    return {
+      ...fromObscurity(format, this.label, entry.rank, edhrecRankToObscurity(scoredRank, this.edhrecCurve), 'measured'),
+      scoredRank,
+      share: entry.share,
+      sampleSize,
+    };
   }
 }
 
 /**
  * Generic provider for any format whose popularity arrives as a ranked list
- * (MTGDecks, MTGGoldfish or MTGTop8 exports, a scraped metagame snapshot,
- * your own backend). Feed it `oracleId → rank` per format plus the size of
- * the played pool; cards absent from the table count as unplayed.
+ * (your own backend, another site's export). Feed it `oracleId → rank` per
+ * format plus the size of the played pool; cards absent from the table
+ * count as unplayed.
  *
- *   const modern = new RankTablePopularityProvider('mtgdecks-modern', 'MTGDecks', {
+ *   const modern = new RankTablePopularityProvider('my-modern', 'My data', {
  *     modern: { ranks: new Map([[ragavanOracleId, 3], ...]), poolSize: 1800 },
  *   });
  */
@@ -231,17 +398,19 @@ export interface ProviderRegistration {
   weight: number;
 }
 
+export interface Aggregate {
+  obscurity: number;
+  contributions: FormatContribution[];
+  /** The contribution that set the result (the primary format unless another beat it). */
+  deciding: FormatContribution | null;
+}
+
 /**
  * Combines per-format popularity into one effective obscurity.
  *
- * Why this exists: a Modern staple like Ragavan or Thoughtseize may be only
- * middling in Commander, and v1 would happily pay 700+ points for it. With
- * a Modern provider registered, either strategy closes that gap:
- *
  *  - `max-popularity` treats a card as only as obscure as it is in its most
- *    played format. Thoughtseize at 0.95 Modern popularity with weight 0.8
- *    has an effective popularity of max(commander, 0.76), so it can't score
- *    above about 280 points.
+ *    played format. Each secondary format's popularity is scaled by its
+ *    weight before comparing. This is what the game uses.
  *
  *  - `weighted-penalty` keeps Commander as the baseline and shaves off
  *    Σ(weight × popularity) elsewhere, capped at `maxPenalty`. Gentler, and
@@ -271,7 +440,7 @@ export class CrossFormatAggregator {
     return this.strategy.weights[registration.format] ?? registration.weight;
   }
 
-  async aggregate(oracleId: string): Promise<{ obscurity: number; contributions: FormatContribution[] }> {
+  async aggregate(oracleId: string): Promise<Aggregate> {
     const contributions = await Promise.all(
       this.registrations.map(async (registration): Promise<FormatContribution> => {
         const popularity = await registration.provider
@@ -287,12 +456,19 @@ export class CrossFormatAggregator {
     const secondaries = usable.filter((c) => c !== primary && c.weight > 0);
 
     let obscurity = primaryObscurity;
+    let deciding: FormatContribution | null = primary ?? null;
     switch (this.strategy.kind) {
       case 'primary-only':
         break;
       case 'max-popularity': {
         let maxPopularity = 1 - primaryObscurity;
-        for (const c of secondaries) maxPopularity = Math.max(maxPopularity, c.popularity.popularity * c.weight);
+        for (const c of secondaries) {
+          const weighted = c.popularity.popularity * c.weight;
+          if (weighted > maxPopularity) {
+            maxPopularity = weighted;
+            deciding = c;
+          }
+        }
         obscurity = 1 - maxPopularity;
         break;
       }
@@ -303,7 +479,7 @@ export class CrossFormatAggregator {
       }
     }
 
-    return { obscurity: Math.min(1, Math.max(0, obscurity)), contributions };
+    return { obscurity: Math.min(1, Math.max(0, obscurity)), contributions, deciding };
   }
 }
 
@@ -313,6 +489,31 @@ export class CrossFormatAggregator {
 
 export function formatRankLabel(rank: number | null): string {
   return rank == null ? 'Not ranked on EDHREC' : `EDHREC Rank #${rank.toLocaleString('en-US')}`;
+}
+
+/** "24%", "3.4%", "0.6%". */
+export function formatShare(share: number): string {
+  const pct = share * 100;
+  return `${pct >= 10 ? Math.round(pct) : pct.toFixed(1)}%`;
+}
+
+export const FORMAT_NAMES: Record<Format, string> = {
+  commander: 'Commander',
+  premodern: 'Premodern',
+  ...METAGAME_FORMAT_NAMES,
+};
+
+/** One line describing a format's measurement, e.g. "24% of Modern decks". */
+export function describePopularity(popularity: NormalizedPopularity): string {
+  const name = FORMAT_NAMES[popularity.format];
+  if (popularity.format === 'commander') {
+    if (popularity.rank != null) return formatRankLabel(popularity.rank);
+    if (popularity.scoredRank === 1) return 'Basic land';
+    if (popularity.scoredRank === BANNED_IN_COMMANDER_RANK) return 'Banned in Commander';
+    return 'Not ranked on EDHREC';
+  }
+  if (popularity.share && popularity.share > 0) return `${formatShare(popularity.share)} of ${name} decks`;
+  return `No recent ${name} decks`;
 }
 
 export class ScoringEngine {
@@ -328,30 +529,45 @@ export class ScoringEngine {
 
   async score(card: ScryfallCard): Promise<ScoreResult> {
     this.source?.remember?.(card);
-    const { obscurity, contributions } = await this.aggregator.aggregate(getOracleId(card));
+    const { obscurity, contributions, deciding } = await this.aggregator.aggregate(getOracleId(card));
     const points = obscurityToPoints(obscurity, this.curve);
     const edhrecRank = card.edhrec_rank ?? null;
-    const notes = contributions.map((c) => c.popularity.note).filter((n): n is string => Boolean(n));
+    const notes = [...new Set(contributions.map((c) => c.popularity.note).filter((n): n is string => Boolean(n)))];
     return {
       points,
       obscurity,
       tier: tierForPoints(points),
       edhrecRank,
-      rankLabel: formatRankLabel(edhrecRank),
+      rankLabel: deciding ? describePopularity(deciding.popularity) : formatRankLabel(edhrecRank),
       contributions,
+      deciding,
       strategy: this.aggregator.strategyKind,
       notes,
     };
   }
 }
 
-/** v1 wiring: Commander only, EDHREC rank via Scryfall. */
-export function createDefaultScoringEngine(source: CardSource): ScoringEngine {
-  const edhrec = new EdhrecPopularityProvider(source);
+/**
+ * Commander via EDHREC plus, when a metagame loader is given, every 60-card
+ * format in the snapshot, combined with `max-popularity`: a card scores as
+ * obscure as it is in its most-played format. Format reach is applied
+ * inside the metagame curve, so every registration weighs 1.
+ */
+export function createDefaultScoringEngine(
+  source: CardSource,
+  loadMetagame?: () => Promise<MetagameIndex | null>,
+): ScoringEngine {
+  const registrations: ProviderRegistration[] = [
+    { provider: new EdhrecPopularityProvider(source), format: 'commander', weight: 1 },
+  ];
+  if (loadMetagame) {
+    const metagame = new MetagamePopularityProvider(loadMetagame);
+    for (const format of METAGAME_FORMATS) registrations.push({ provider: metagame, format, weight: 1 });
+  }
   const aggregator = new CrossFormatAggregator(
     'commander',
-    [{ provider: edhrec, format: 'commander', weight: 1 }],
-    { kind: 'primary-only' },
+    registrations,
+    loadMetagame ? { kind: 'max-popularity', weights: {} } : { kind: 'primary-only' },
   );
   return new ScoringEngine(aggregator, DEFAULT_EDHREC_CURVE, source);
 }

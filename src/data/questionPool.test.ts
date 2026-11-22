@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ACTIVE_QUESTIONS, DAILY_QUESTION_COUNT, questionById, selectDailyQuestions } from './questionPool';
 import { makeCard } from '../test/fixtures';
-import { checkCommanderEligibility } from '../services/cardEligibility';
-import { rankSuggestions, sanitizeInput } from '../services/scryfallService';
+import { checkCardEligibility } from '../services/cardEligibility';
+import { sanitizeInput } from '../services/scryfallService';
 
 const q = (id: string) => {
   const question = questionById(id);
@@ -98,16 +98,47 @@ describe('validators', () => {
 });
 
 describe('eligibility', () => {
-  it('rejects banned, silver-bordered, stickers and meld results', () => {
-    expect(checkCommanderEligibility(makeCard({ name: 'Black Lotus', legalities: { commander: 'banned' } })).ok).toBe(false);
+  it('accepts banned and restricted cards', () => {
     expect(
-      checkCommanderEligibility(
+      checkCardEligibility(makeCard({ name: 'Mana Crypt', legalities: { commander: 'banned', vintage: 'restricted', legacy: 'banned' } })).ok,
+    ).toBe(true);
+    // Ante cards are banned everywhere but are still real cards.
+    expect(checkCardEligibility(makeCard({ name: 'Contract from Below', legalities: { commander: 'banned', vintage: 'banned' } })).ok).toBe(
+      true,
+    );
+    // Black-bordered Unfinity cards are tournament legal.
+    expect(
+      checkCardEligibility(
+        makeCard({ name: 'Comet, Stellar Pup', set_type: 'funny', legalities: { commander: 'legal', vintage: 'legal' } }),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('rejects Un-cards, digital-only cards, previews, stickers and meld results', () => {
+    expect(
+      checkCardEligibility(
+        makeCard({ name: 'A-Lightning Bolt', games: ['arena'], digital: true, legalities: { commander: 'not_legal', vintage: 'not_legal' } }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      checkCardEligibility(
+        makeCard({ name: 'Upcoming', released_at: '2099-01-01', legalities: { commander: 'not_legal', vintage: 'not_legal' } }),
+        '2026-11-22',
+      ).ok,
+    ).toBe(false);
+    // An old card whose newest printing is still a preview counts.
+    expect(checkCardEligibility(makeCard({ name: 'Forest', released_at: '2099-01-01' }), '2026-11-22').ok).toBe(true);
+    expect(
+      checkCardEligibility(makeCard({ name: 'Backup Plan', type_line: 'Conspiracy', legalities: { commander: 'banned', vintage: 'banned' } })).ok,
+    ).toBe(false);
+    expect(
+      checkCardEligibility(
         makeCard({ name: 'Mox Lotus', legalities: { commander: 'not_legal' }, border_color: 'silver', set_type: 'funny' }),
       ).ok,
     ).toBe(false);
-    expect(checkCommanderEligibility(makeCard({ name: 'Sheet', type_line: 'Stickers' })).ok).toBe(false);
+    expect(checkCardEligibility(makeCard({ name: 'Sheet', type_line: 'Stickers' })).ok).toBe(false);
     expect(
-      checkCommanderEligibility(
+      checkCardEligibility(
         makeCard({
           name: 'Brisela, Voice of Nightmares',
           layout: 'meld',
@@ -119,33 +150,11 @@ describe('eligibility', () => {
         }),
       ).ok,
     ).toBe(false);
-    expect(checkCommanderEligibility(makeCard({ name: 'Sol Ring' })).ok).toBe(true);
+    expect(checkCardEligibility(makeCard({ name: 'Sol Ring' })).ok).toBe(true);
   });
 });
 
-describe('suggestion ranking', () => {
-  it('puts an exact face match first', () => {
-    const cards = [
-      makeCard({ name: 'Ice Cage' }),
-      makeCard({ name: 'Iceberg' }),
-      makeCard({
-        name: 'Fire // Ice',
-        layout: 'split',
-        card_faces: [
-          { object: 'card_face', name: 'Fire', type_line: 'Instant' },
-          { object: 'card_face', name: 'Ice', type_line: 'Instant' },
-        ],
-      }),
-    ];
-    expect(rankSuggestions(cards, 'ice')[0]?.card.name).toBe('Fire // Ice');
-  });
-
-  it('forgives spacing and punctuation', () => {
-    const cards = [makeCard({ name: 'Boompile' })];
-    const [top] = rankSuggestions(cards, 'Boom Pile');
-    expect(top?.matchRank).toBe(0);
-  });
-
+describe('input sanitising', () => {
   it('strips search syntax from input', () => {
     expect(sanitizeInput('t:creature "Sol Ring"')).toBe('t creature Sol Ring');
   });

@@ -113,6 +113,12 @@ class AudioCues {
     this.tone(147, 0.09, 0.42, { type: 'triangle', gain: 0.28 });
   }
 
+  /** Clock tick for the last seconds of a round. */
+  tick(): void {
+    if (!this.ready) return;
+    this.tone(1320, 0, 0.06, { type: 'square', gain: 0.05 });
+  }
+
   flip(): void {
     if (!this.ready) return;
     this.tone(330, 0, 0.18, { type: 'sine', gain: 0.18 });

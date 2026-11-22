@@ -1,0 +1,60 @@
+name: Refresh 60-card popularity
+
+# Rebuilds public/data/metagame.json from the last 30 days of official Magic
+# Online decklists and commits it when it changes. Any host that deploys on
+# push (Vercel, Netlify, Cloudflare Pages) picks the new file up. A deploy
+# workflow in this repo would not: pushes made with GITHUB_TOKEN don't
+# trigger other workflows, so call it from here instead if you add one.
+
+on:
+  schedule:
+    # 06:20 UTC: after Scryfall's nightly bulk export and the previous day's MTGO lists.
+    - cron: '20 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: metagame
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    # The first run reads ~350 event pages from scratch, and mtgo.com often
+    # takes 30 s per page before a retry succeeds. Later runs reuse the
+    # cache and only fetch the day's new events.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Event pages older than two days never change, so keep them between runs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/mtgo
+            .cache/scryfall/aliases.json
+          key: mtgo-events-${{ github.run_id }}
+          restore-keys: mtgo-events-
+
+      - run: npm ci
+
+      - run: npm run data:metagame
+
+      - name: Commit the snapshot if it changed
+        run: |
+          if git diff --quiet -- public/data/metagame.json; then
+            echo "No change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/metagame.json
+          git commit -m "Refresh 60-card popularity snapshot"
+          git push

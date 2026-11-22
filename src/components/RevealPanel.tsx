@@ -8,6 +8,8 @@ import { RarityGem } from './art/RarityGem';
 import { ScoreTally } from './ScoreTally';
 import { ObscurityMeter } from './ObscurityMeter';
 import { scryfallSearchUrl } from '../services/scryfallService';
+import { CARD_POOL_QUERY } from '../services/cardEligibility';
+import { PlayBreakdown } from './PlayBreakdown';
 
 interface RevealPanelProps {
   reveal: RevealState;
@@ -19,16 +21,17 @@ interface RevealPanelProps {
 }
 
 export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onEndRun }: RevealPanelProps) {
-  const { card, score, question, validationNote } = reveal;
+  const { card, score, question, answer } = reveal;
   const { tier } = score;
   const nextRef = useRef<HTMLButtonElement>(null);
+  const bonus = answer.speedBonus ?? 0;
 
   useEffect(() => {
     const id = window.setTimeout(() => nextRef.current?.focus({ preventScroll: true }), 1400);
     return () => window.clearTimeout(id);
   }, []);
 
-  const notes = [validationNote, ...score.notes].filter((n): n is string => Boolean(n));
+  const notes = [...reveal.notes, ...score.notes].filter((n): n is string => Boolean(n));
   const nextLabel = mode === 'daily' ? (isLastRound ? 'See your results' : 'Next round') : 'Next prompt';
   const prismatic = tier.id === 'serialized';
 
@@ -81,22 +84,22 @@ export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onE
         </div>
 
         <ScoreTally points={score.points} className="mt-7 justify-center lg:justify-start" />
+        <motion.p
+          className="mt-2 text-sm text-parchment/80"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 2.2, duration: 0.4 }}
+        >
+          <span className="font-semibold text-gold-pale">+{bonus} speed bonus</span>
+          <span className="text-ash"> for a round total of </span>
+          <span className="tabular font-display font-bold text-parchment">{answer.points.toLocaleString('en-US')}</span>
+        </motion.p>
 
         <div className="mt-6 max-w-md lg:max-w-lg mx-auto lg:mx-0">
           <ObscurityMeter points={score.points} tier={tier} />
         </div>
 
-        <dl className="mx-auto mt-6 grid max-w-md grid-cols-2 gap-x-6 gap-y-1 text-left lg:mx-0">
-          <dt className="text-xs text-ash">Commander popularity</dt>
-          <dt className="text-xs text-ash">Card</dt>
-          <dd className="tabular font-display text-lg font-semibold text-parchment">{score.rankLabel}</dd>
-          <dd className="truncate font-display text-lg font-semibold text-parchment" title={card.name}>
-            {card.name}
-          </dd>
-        </dl>
-        <p className="mx-auto mt-2 max-w-md text-xs text-ash lg:mx-0">
-          Rank #1 is the most-played card on EDHREC. The higher the rank, the fewer decks run it.
-        </p>
+        <PlayBreakdown score={score} accent={prismatic ? '#F6D9FF' : tier.color} />
 
         {notes.length > 0 && (
           <ul className="mx-auto mt-4 max-w-md space-y-1 font-flavor text-base italic text-gold-pale/85 lg:mx-0">
@@ -127,7 +130,7 @@ export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onE
           </a>
           <a
             className="inline-flex items-center gap-1.5 text-gold-pale underline decoration-gold/40 underline-offset-4 hover:decoration-gold"
-            href={scryfallSearchUrl(`${question.scryfallQueryHint} f:commander`)}
+            href={scryfallSearchUrl(`${question.scryfallQueryHint} game:paper ${CARD_POOL_QUERY}`)}
             target="_blank"
             rel="noreferrer"
           >

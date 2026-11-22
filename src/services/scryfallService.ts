@@ -4,23 +4,30 @@ import type {
   ScryfallError,
   ScryfallList,
 } from '../types/mtg';
-import { getOracleId, nameVariants, normalizeName } from '../lib/cardFaces';
+import { getOracleId, normalizeName } from '../lib/cardFaces';
+import { NameIndex } from '../lib/fuzzy';
 
 /**
  * Scryfall REST client.
  *
- * Scryfall asks for 50–100 ms between requests (≈10/s). Every call goes
- * through one serial queue that enforces a 100 ms gap, and results are kept in
- * an in-memory TTL cache so retyping a query or revisiting a card costs
- * nothing. Browsers send their own User-Agent; we add `Accept` as Scryfall's
- * guidelines request.
+ * Scryfall's hard limits (scryfall.com/docs/api/rate-limits): /cards/search,
+ * /cards/named, /cards/random and /cards/collection allow 2 requests per
+ * second; everything else allows 10. A 429 locks the client out for 30
+ * seconds, and ignoring it risks a ban, so after one we stop calling
+ * entirely until the lockout ends. Results are cached in memory so repeated
+ * lookups cost nothing. Browsers send their own User-Agent; we add `Accept`
+ * as Scryfall's guidelines request.
  */
 
 const API_ROOT = 'https://api.scryfall.com';
-const MIN_REQUEST_GAP_MS = 100;
+const CARD_ENDPOINT_GAP_MS = 500;
+const GENERAL_GAP_MS = 100;
+const RATE_LIMIT_LOCKOUT_MS = 31_000;
+const CARD_ENDPOINTS = /^\/cards\/(search|named|random|collection)/;
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 500;
-const MAX_SUGGESTIONS = 8;
+const CATALOG_STORAGE_KEY = 'magillion.catalog.v1';
+const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class ScryfallRequestError extends Error {
   readonly status: number;
@@ -31,43 +38,28 @@ export class ScryfallRequestError extends Error {
   }
 }
 
-/** Thrown when a queued request was superseded before it was sent. */
-export class StaleRequestError extends Error {
-  constructor() {
-    super('Request superseded');
-    this.name = 'StaleRequestError';
-  }
-}
-
 type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ScryfallError };
-
-interface RequestOptions {
-  /** Checked just before dispatch; a stale request is skipped entirely. */
-  isStale?: () => boolean;
-}
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Hands out dispatch slots at least `gapMs` apart. Requests may overlap in
+ * flight, but never start faster than Scryfall's limit.
+ */
 class RateLimitedQueue {
-  private tail: Promise<unknown> = Promise.resolve();
-  private lastDispatch = 0;
+  private nextSlot = 0;
   private readonly gapMs: number;
 
   constructor(gapMs: number) {
     this.gapMs = gapMs;
   }
 
-  schedule<T>(task: () => Promise<T>, isStale?: () => boolean): Promise<T> {
-    const run = this.tail.then(async () => {
-      if (isStale?.()) throw new StaleRequestError();
-      const wait = this.lastDispatch + this.gapMs - Date.now();
-      if (wait > 0) await delay(wait);
-      if (isStale?.()) throw new StaleRequestError();
-      this.lastDispatch = Date.now();
-      return task();
-    });
-    this.tail = run.catch(() => undefined);
-    return run;
+  async schedule<T>(task: () => Promise<T>): Promise<T> {
+    const slot = Math.max(Date.now(), this.nextSlot);
+    this.nextSlot = slot + this.gapMs;
+    const wait = slot - Date.now();
+    if (wait > 0) await delay(wait);
+    return task();
   }
 }
 
@@ -88,7 +80,6 @@ class TtlCache<V> {
       this.entries.delete(key);
       return undefined;
     }
-    // Refresh recency for LRU eviction.
     this.entries.delete(key);
     this.entries.set(key, hit);
     return hit.value;
@@ -104,19 +95,6 @@ class TtlCache<V> {
     }
   }
 }
-
-export interface SearchSuggestion {
-  card: ScryfallCard;
-  /** 0 exact, 1 prefix, 2 word prefix, 3 substring, 4 fuzzy. */
-  matchRank: number;
-  /** The name or face name that matched best. */
-  matchedName: string;
-}
-
-export type ResolveOutcome =
-  | { status: 'found'; card: ScryfallCard }
-  | { status: 'ambiguous'; message: string }
-  | { status: 'not_found'; message: string };
 
 /* ------------------------------------------------------------------------ */
 /* Query building                                                            */
@@ -139,71 +117,16 @@ function nameTokens(cleaned: string): string[] {
     .filter((t) => normalizeName(t).length > 0);
 }
 
-/** Name-contains query: every word must appear somewhere in the card name. */
+/** Every word must appear somewhere in the card name (either face). */
 export function buildContainsQuery(cleaned: string): string {
-  return `${nameTokens(cleaned)
+  return nameTokens(cleaned)
     .map((t) => `"${t}"`)
-    .join(' ')} game:paper`;
+    .join(' ');
 }
 
-/** Prefix-or-exact query used when the contains query is too broad to rank. */
-export function buildPrefixQuery(cleaned: string): string {
-  const words = cleaned
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean);
-  const pattern = words.join('.*');
-  return `(name:/^${pattern}/ or !"${cleaned}") game:paper`;
-}
-
-/* ------------------------------------------------------------------------ */
-/* Ranking                                                                   */
-/* ------------------------------------------------------------------------ */
-
-function wordPrefixMatch(name: string, needle: string): boolean {
-  const words = name
-    .normalize('NFKD')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-  for (let i = 1; i < words.length; i++) {
-    if (words.slice(i).join('').startsWith(needle)) return true;
-  }
-  return false;
-}
-
-export function rankMatch(card: ScryfallCard, input: string): { rank: number; name: string } {
-  const needle = normalizeName(input);
-  let best = { rank: 4, name: card.name };
-  for (const variant of nameVariants(card)) {
-    const n = normalizeName(variant);
-    let rank = 4;
-    if (n === needle) rank = 0;
-    else if (n.startsWith(needle)) rank = 1;
-    else if (wordPrefixMatch(variant, needle)) rank = 2;
-    else if (n.includes(needle)) rank = 3;
-    if (rank < best.rank) best = { rank, name: variant };
-  }
-  return best;
-}
-
-export function rankSuggestions(cards: ScryfallCard[], input: string, limit = MAX_SUGGESTIONS): SearchSuggestion[] {
-  const seen = new Set<string>();
-  const ranked: SearchSuggestion[] = [];
-  for (const card of cards) {
-    const key = getOracleId(card);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const { rank, name } = rankMatch(card, input);
-    ranked.push({ card, matchRank: rank, matchedName: name });
-  }
-  ranked.sort(
-    (a, b) =>
-      a.matchRank - b.matchRank ||
-      a.matchedName.length - b.matchedName.length ||
-      a.card.name.localeCompare(b.card.name),
-  );
-  return ranked.slice(0, limit);
+/** Exact-name clause for a list of names: (!"A" or !"B"). */
+export function buildExactNamesQuery(names: readonly string[]): string {
+  return `(${names.map((n) => `!"${n.replace(/"/g, '')}"`).join(' or ')})`;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -211,21 +134,38 @@ export function rankSuggestions(cards: ScryfallCard[], input: string, limit = MA
 /* ------------------------------------------------------------------------ */
 
 export class ScryfallService {
-  private readonly queue = new RateLimitedQueue(MIN_REQUEST_GAP_MS);
+  private readonly cardQueue = new RateLimitedQueue(CARD_ENDPOINT_GAP_MS);
+  private readonly generalQueue = new RateLimitedQueue(GENERAL_GAP_MS);
   private readonly cache = new TtlCache<ApiResult<unknown>>(CACHE_TTL_MS, CACHE_MAX_ENTRIES);
   private readonly byOracleId = new Map<string, ScryfallCard>();
   private symbology: Promise<Map<string, ScryfallCardSymbol>> | null = null;
+  private nameIndex: Promise<NameIndex | null> | null = null;
+  private lockedUntil = 0;
 
-  private async request<T>(path: string, options: RequestOptions = {}): Promise<ApiResult<T>> {
+  /** Milliseconds until Scryfall will accept requests again after a 429. */
+  get rateLimitCooldownMs(): number {
+    return Math.max(0, this.lockedUntil - Date.now());
+  }
+
+  private async request<T>(path: string): Promise<ApiResult<T>> {
     const cached = this.cache.get(path);
     if (cached) return cached as ApiResult<T>;
+    if (this.rateLimitCooldownMs > 0) {
+      throw new ScryfallRequestError('Scryfall asked us to slow down', 429);
+    }
 
-    const result = await this.queue.schedule<ApiResult<T>>(async () => {
+    const queue = CARD_ENDPOINTS.test(path) ? this.cardQueue : this.generalQueue;
+    const result = await queue.schedule<ApiResult<T>>(async () => {
+      if (this.rateLimitCooldownMs > 0) throw new ScryfallRequestError('Scryfall asked us to slow down', 429);
       let response: Response;
       try {
         response = await fetch(`${API_ROOT}${path}`, { headers: { Accept: 'application/json' } });
       } catch {
         throw new ScryfallRequestError('Scryfall could not be reached', 0);
+      }
+      if (response.status === 429) {
+        this.lockedUntil = Date.now() + RATE_LIMIT_LOCKOUT_MS;
+        throw new ScryfallRequestError('Scryfall asked us to slow down', 429);
       }
       const body: unknown = await response.json().catch(() => null);
       if (response.ok) return { ok: true, data: body as T };
@@ -233,10 +173,9 @@ export class ScryfallService {
         return { ok: false, error: body as ScryfallError };
       }
       throw new ScryfallRequestError(`Scryfall responded with ${response.status}`, response.status);
-    }, options.isStale);
+    });
 
     // Successes and definitive "no such card" answers are safe to reuse.
-    // Rate limits and server errors are not.
     if (result.ok || result.error.status === 404 || result.error.status === 400) {
       this.cache.set(path, result);
     }
@@ -251,83 +190,44 @@ export class ScryfallService {
     this.byOracleId.set(getOracleId(card), card);
   }
 
-  private rememberAll(cards: ScryfallCard[]): void {
-    for (const card of cards) this.remember(card);
+  /** A card whose full name or either face name matches exactly. */
+  async getCardByExactName(name: string): Promise<ScryfallCard | null> {
+    const cleaned = sanitizeInput(name);
+    if (!cleaned) return null;
+    const result = await this.request<ScryfallCard>(`/cards/named?exact=${encodeURIComponent(cleaned)}`);
+    if (!result.ok) return null;
+    this.remember(result.data);
+    return result.data;
+  }
+
+  /** Scryfall's own fuzzy matcher; used when the local name index isn't ready. */
+  async getCardByFuzzyName(name: string): Promise<ScryfallCard | null> {
+    const cleaned = sanitizeInput(name);
+    if (!cleaned) return null;
+    const result = await this.request<ScryfallCard>(`/cards/named?fuzzy=${encodeURIComponent(cleaned)}`);
+    if (!result.ok) return null;
+    this.remember(result.data);
+    return result.data;
   }
 
   /**
-   * Live suggestions for the search box. Matches either half of split, MDFC
-   * and adventure cards, tolerates spacing and punctuation differences
-   * ("Boom Pile" → Boompile), and falls back to Scryfall's fuzzy matcher for
-   * typos. Suggestions are not filtered by format so banned cards can still
-   * be named and explained.
+   * First page of a search, most-played first. Searching by EDHREC order
+   * means the first page always holds the lowest-scoring matches.
    */
-  async searchSuggestions(input: string, options: RequestOptions = {}): Promise<SearchSuggestion[]> {
-    const cleaned = sanitizeInput(input);
-    if (normalizeName(cleaned).length < 2 || nameTokens(cleaned).length === 0) return [];
-
-    // 1. Names that start with the input, plus an exact match on either face
-    //    ("ice" → Fire // Ice). Small, targeted, and usually enough.
-    const prefix = await this.request<ScryfallList<ScryfallCard>>(
-      `/cards/search?unique=cards&order=name&q=${encodeURIComponent(buildPrefixQuery(cleaned))}`,
-      options,
+  async searchByPopularity(query: string): Promise<{ cards: ScryfallCard[]; total: number }> {
+    const result = await this.request<ScryfallList<ScryfallCard>>(
+      `/cards/search?unique=cards&order=edhrec&dir=asc&q=${encodeURIComponent(query)}`,
     );
-    let cards: ScryfallCard[] = prefix.ok ? prefix.data.data : [];
-
-    // 2. Too few: widen to every name containing each word. This finds back
-    //    faces ("tibalt" → Valki // Tibalt) and mid-name words ("sculptor").
-    if (cards.length < MAX_SUGGESTIONS) {
-      const contains = await this.request<ScryfallList<ScryfallCard>>(
-        `/cards/search?unique=cards&order=name&q=${encodeURIComponent(buildContainsQuery(cleaned))}`,
-        options,
-      );
-      if (contains.ok) cards = [...cards, ...contains.data.data];
-    }
-
-    // Nothing contains those words: let Scryfall's fuzzy matcher guess.
-    if (cards.length === 0) {
-      const fuzzy = await this.request<ScryfallCard>(
-        `/cards/named?fuzzy=${encodeURIComponent(cleaned)}`,
-        options,
-      );
-      if (fuzzy.ok) cards = [fuzzy.data];
-    }
-
-    this.rememberAll(cards);
-    return rankSuggestions(cards, cleaned);
-  }
-
-  /** Resolves free text (the Enter key) with Scryfall's fuzzy matcher. */
-  async resolveByName(input: string): Promise<ResolveOutcome> {
-    const cleaned = sanitizeInput(input);
-    if (!cleaned) return { status: 'not_found', message: 'Type a card name first.' };
-    const result = await this.request<ScryfallCard>(`/cards/named?fuzzy=${encodeURIComponent(cleaned)}`);
-    if (result.ok) {
-      this.remember(result.data);
-      return { status: 'found', card: result.data };
-    }
-    if (result.error.type === 'ambiguous') {
-      return {
-        status: 'ambiguous',
-        message: `Several cards answer to “${cleaned}”. Pick one from the list or add more of the name.`,
-      };
-    }
-    return {
-      status: 'not_found',
-      message: `Scryfall has no card named “${cleaned}”. Check the spelling or pick a suggestion.`,
-    };
+    if (!result.ok) return { cards: [], total: 0 };
+    for (const card of result.data.data) this.remember(card);
+    return { cards: result.data.data, total: result.data.total_cards ?? result.data.data.length };
   }
 
   async getCardByOracleId(oracleId: string): Promise<ScryfallCard | null> {
     const known = this.byOracleId.get(oracleId);
     if (known) return known;
-    const result = await this.request<ScryfallList<ScryfallCard>>(
-      `/cards/search?unique=cards&q=${encodeURIComponent(`oracleid:${oracleId}`)}`,
-    );
-    const card = result.ok ? result.data.data[0] : undefined;
-    if (!card) return null;
-    this.remember(card);
-    return card;
+    const { cards } = await this.searchByPopularity(`oracleid:${oracleId}`);
+    return cards[0] ?? null;
   }
 
   /** Release date of a card's earliest printing (YYYY-MM-DD). */
@@ -336,6 +236,43 @@ export class ScryfallService {
       `/cards/search?unique=prints&order=released&dir=asc&q=${encodeURIComponent(`oracleid:${oracleId}`)}`,
     );
     return result.ok ? (result.data.data[0]?.released_at ?? null) : null;
+  }
+
+  /**
+   * Index of every English card name (≈35k), for typo correction. Cached in
+   * localStorage for a day so it downloads at most once daily.
+   */
+  getNameIndex(): Promise<NameIndex | null> {
+    if (!this.nameIndex) {
+      this.nameIndex = (async () => {
+        try {
+          const stored = globalThis.localStorage?.getItem(CATALOG_STORAGE_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as { fetchedAt: number; names: string[] };
+            if (Date.now() - parsed.fetchedAt < CATALOG_TTL_MS && parsed.names.length > 1000) {
+              return new NameIndex(parsed.names);
+            }
+          }
+        } catch {
+          // Corrupt or blocked storage: fall through to the network.
+        }
+        const result = await this.request<{ data: string[] }>('/catalog/card-names');
+        if (!result.ok) return null;
+        try {
+          globalThis.localStorage?.setItem(
+            CATALOG_STORAGE_KEY,
+            JSON.stringify({ fetchedAt: Date.now(), names: result.data.data }),
+          );
+        } catch {
+          // Quota exceeded: keep it in memory only.
+        }
+        return new NameIndex(result.data.data);
+      })().catch(() => {
+        this.nameIndex = null;
+        return null;
+      });
+    }
+    return this.nameIndex;
   }
 
   /** Mana and card symbols keyed by their text form, e.g. "{W/U}". */

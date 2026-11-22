@@ -14,6 +14,13 @@ import { FiligreeDivider } from './art/Filigree';
 import { ScoreTally } from './ScoreTally';
 import { toNumeral } from './GauntletTrack';
 
+const STATUS_LABEL: Record<AnswerRecord['status'], string> = {
+  answered: '',
+  passed: 'Passed',
+  timeout: 'Out of time',
+  'out-of-attempts': 'Out of attempts',
+};
+
 function AnswerTile({ answer, question, index }: { answer: AnswerRecord; question?: QuestionDefinition; index: number }) {
   const tier = answer.tierId ? tierById(answer.tierId) : null;
   return (
@@ -38,7 +45,9 @@ function AnswerTile({ answer, question, index }: { answer: AnswerRecord; questio
               loading="lazy"
             />
           ) : (
-            <div className="grid aspect-[626/457] w-full place-items-center font-flavor italic text-ash">Passed</div>
+            <div className="grid aspect-[626/457] w-full place-items-center font-flavor italic text-ash">
+              {STATUS_LABEL[answer.status]}
+            </div>
           )}
         </div>
       </div>
@@ -119,7 +128,7 @@ export function SummaryScreen({
         {isDaily ? formatDateKey(dateKey) : `${answers.length} prompt${answers.length === 1 ? '' : 's'} answered`}
       </p>
 
-      <ScoreTally points={total} delay={0.2} suffix={isDaily ? 'of 5,000' : 'points'} className="mt-6 justify-center" />
+      <ScoreTally points={total} delay={0.2} suffix="points" className="mt-6 justify-center" />
 
       <FiligreeDivider className="mx-auto my-8 max-w-full" />
 

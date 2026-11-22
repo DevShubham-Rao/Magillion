@@ -285,6 +285,16 @@ export interface NormalizedPopularity {
   obscurity: number;
   confidence: PopularityConfidence;
   note?: string;
+  /**
+   * The rank the points curve was fed, on the EDHREC scale: basic lands
+   * count as #1, cards banned in Commander as #1,000, and a 60-card deck
+   * share as its equivalent rank.
+   */
+  scoredRank?: number | null;
+  /** 60-card formats: fraction of recent decks running the card, 0–1. */
+  share?: number;
+  /** 60-card formats: how many decks the share was measured over. */
+  sampleSize?: number;
 }
 
 export interface FormatPopularityProvider {
@@ -295,7 +305,7 @@ export interface FormatPopularityProvider {
 }
 
 export type AggregationStrategy =
-  /** v1: only the primary format (Commander) counts. */
+  /** Only the primary format (Commander) counts. */
   | { kind: 'primary-only' }
   /**
    * A card is only as obscure as it is in its most-played format. Each
@@ -321,6 +331,8 @@ export interface ScoreResult {
   edhrecRank: number | null;
   rankLabel: string;
   contributions: FormatContribution[];
+  /** The format that set the score: where the card is most played. */
+  deciding: FormatContribution | null;
   strategy: AggregationStrategy['kind'];
   notes: string[];
 }

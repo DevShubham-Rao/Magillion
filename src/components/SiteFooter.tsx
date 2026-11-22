@@ -6,9 +6,18 @@ export function SiteFooter() {
         <a className="underline decoration-ash/40 underline-offset-2 hover:text-parchment" href="https://scryfall.com" target="_blank" rel="noreferrer">
           Scryfall
         </a>
-        . Popularity from{' '}
+        . Commander popularity from{' '}
         <a className="underline decoration-ash/40 underline-offset-2 hover:text-parchment" href="https://edhrec.com" target="_blank" rel="noreferrer">
           EDHREC
+        </a>
+        ; 60-card popularity from the official{' '}
+        <a
+          className="underline decoration-ash/40 underline-offset-2 hover:text-parchment"
+          href="https://www.mtgo.com/decklists"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Magic Online decklists
         </a>
         .
       </p>

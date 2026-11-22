@@ -14,7 +14,10 @@ import { RevealPanel } from './components/RevealPanel';
 import { SummaryScreen } from './components/SummaryScreen';
 import { HowToPlay } from './components/HowToPlay';
 import { SiteFooter } from './components/SiteFooter';
+import { RoundLostPanel } from './components/RoundLostPanel';
 import { toNumeral } from './components/GauntletTrack';
+import { scryfall } from './services/scryfallService';
+import { loadMetagame } from './services/metagame';
 
 export default function App() {
   const progress = useProgress();
@@ -29,6 +32,12 @@ export default function App() {
   useEffect(() => {
     audioCues.setMuted(progress.settings.muted);
   }, [progress.settings.muted]);
+
+  // Warm the typo-correction name index and the 60-card play snapshot before the first answer.
+  useEffect(() => {
+    void scryfall.getNameIndex();
+    void loadMetagame();
+  }, []);
 
   const closeHelp = useCallback(() => {
     setHelpOpen(false);
@@ -49,7 +58,9 @@ export default function App() {
       ? `Round ${toNumeral(game.roundIndex)} of ${toNumeral(game.questions.length)}`
       : `Practice round ${game.roundIndex}`;
 
-  const stageKey = `${mode}-${game.view}-${game.view === 'question' ? game.roundIndex : ''}`;
+  const stageKey = `${mode}-${game.view === 'ready' ? 'question' : game.view}-${
+    game.view === 'question' || game.view === 'ready' ? game.roundIndex : ''
+  }`;
 
   return (
     <div className="relative flex min-h-dvh flex-col overflow-x-hidden">
@@ -76,13 +87,24 @@ export default function App() {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.32, ease: 'easeOut' }}
           >
-            {game.view === 'question' && game.currentQuestion && (
+            {(game.view === 'question' || game.view === 'ready') && game.currentQuestion && (
               <QuestionStage game={game} question={game.currentQuestion} roundLabel={roundLabel} />
             )}
 
             {game.view === 'reveal' && game.reveal && (
               <RevealPanel
                 reveal={game.reveal}
+                mode={mode}
+                roundLabel={revealRoundLabel}
+                isLastRound={mode === 'daily' && game.roundIndex >= game.questions.length}
+                onNext={game.advance}
+                onEndRun={mode === 'practice' ? game.endPracticeRun : undefined}
+              />
+            )}
+
+            {game.view === 'lost' && game.loss && (
+              <RoundLostPanel
+                loss={game.loss}
                 mode={mode}
                 roundLabel={revealRoundLabel}
                 isLastRound={mode === 'daily' && game.roundIndex >= game.questions.length}

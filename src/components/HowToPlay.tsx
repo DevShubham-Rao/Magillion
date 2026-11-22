@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { RARITY_TIERS } from '../data/rarityTiers';
 import { RarityGem } from './art/RarityGem';
 import { FiligreeDivider, FiligreeFrame } from './art/Filigree';
+import { MAX_ATTEMPTS, MAX_SPEED_BONUS, ROUND_SECONDS } from '../data/gameRules';
 
 export function HowToPlay({ open, onClose }: { open: boolean; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -61,19 +62,28 @@ export function HowToPlay({ open, onClose }: { open: boolean; onClose: () => voi
             <FiligreeDivider className="mx-auto my-5 max-w-full" />
 
             <ol className="mx-auto max-w-prose list-decimal space-y-3 pl-5 text-[15px] leading-relaxed text-parchment/85 marker:font-display marker:text-gold">
-              <li>Each round asks you to name a card, like “Name an Artifact.”</li>
               <li>
-                Your card must be legal in Commander and fit the prompt. Banned cards, Un-cards and cards that don't fit
-                are turned away with a reason, and you can try again at no cost.
+                Each round asks you to name a card, like “Name an Artifact.” You have {ROUND_SECONDS} seconds and{' '}
+                {MAX_ATTEMPTS} attempts. There's no suggestion list: you have to know the card.
               </li>
               <li>
-                Points come from EDHREC rank. Sol Ring sits at #1 and scores 50; a card almost nobody plays scores up to
-                1,000. Name the most obscure valid card you can think of.
+                Typos are corrected for you. A partial name like “urza” is finished as the most-played matching card
+                that fits the prompt, so a vague answer earns the fewest points.
               </li>
-              <li>Each card answers once per gauntlet. Stuck? Pass the round for 0 points.</li>
               <li>
-                Everyone gets the same five prompts each day. A new gauntlet opens at midnight UTC. Practice mode deals
-                endless prompts whenever you like.
+                Any paper card counts, banned ones included, as long as it fits the prompt. Un-cards and cards that only
+                exist on Arena don't. A card that doesn't fit uses up an attempt. Run out of time or attempts and the
+                round scores 0.
+              </li>
+              <li>
+                Points come from how much the card is played, in whichever format plays it most: Commander by EDHREC rank,
+                and Standard, Pioneer, Modern, Legacy, Vintage and Pauper by their share of the last 30 days of Magic
+                Online decklists. Sol Ring scores 50; a card nobody plays anywhere scores 1,000. Answer quickly for up to{' '}
+                {MAX_SPEED_BONUS} bonus points on top.
+              </li>
+              <li>
+                Each card answers once per gauntlet. Everyone gets the same five prompts each day, and a new gauntlet
+                opens at midnight UTC. Practice mode deals endless prompts whenever you like.
               </li>
             </ol>
 

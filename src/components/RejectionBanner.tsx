@@ -10,13 +10,18 @@ const ACCENT: Record<RejectionKind, string> = {
   network: '#9A958A',
 };
 
-/** Explains why a card was turned away. Never costs the player the round. */
+function attemptLine(rejection: Rejection): string {
+  if (!rejection.costAttempt) return "This one doesn't cost an attempt.";
+  return rejection.attemptsLeft === 1 ? 'Last attempt left.' : `${rejection.attemptsLeft} attempts left.`;
+}
+
+/** Explains why an answer was turned away and what it cost. */
 export function RejectionBanner({ rejection, onDismiss }: { rejection: Rejection | null; onDismiss: () => void }) {
   return (
     <AnimatePresence mode="wait">
       {rejection && (
         <motion.div
-          key={`${rejection.title}-${rejection.cardName ?? ''}`}
+          key={`${rejection.title}-${rejection.cardName ?? ''}-${rejection.attemptsLeft}`}
           role="alert"
           initial={{ opacity: 0, y: -8, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1, x: [0, -6, 5, -3, 0] }}
@@ -42,7 +47,9 @@ export function RejectionBanner({ rejection, onDismiss }: { rejection: Rejection
             <p className="font-display text-[15px] font-bold" style={{ color: ACCENT[rejection.kind] }}>
               {rejection.title}
             </p>
+            {rejection.readAs && <p className="mt-0.5 text-xs text-ash">Read as {rejection.readAs}</p>}
             <p className="mt-0.5 text-sm leading-relaxed text-parchment/85">{rejection.reason}</p>
+            <p className="mt-1 text-xs font-semibold text-parchment/60">{attemptLine(rejection)}</p>
           </div>
           <button
             type="button"

@@ -1,4 +1,4 @@
-import type { AnswerRecord, DailyRecord, PlayerProgress, PlayerSettings } from '../types/game';
+import type { AnswerRecord, DailyRecord, PlayerProgress, PlayerSettings, RoundState } from '../types/game';
 import type { RarityTierId } from '../types/mtg';
 import { addDays, daysBetween, puzzleNumber } from '../lib/dates';
 
@@ -142,6 +142,33 @@ function completeDaily(progress: PlayerProgress, dateKey: string, completedAt: s
   };
 }
 
+function emptyDailyRecord(dateKey: string, questionIds: string[]): DailyRecord {
+  return {
+    dateKey,
+    puzzleNumber: puzzleNumber(dateKey),
+    questionIds,
+    answers: [],
+    completedAt: null,
+    totalScore: 0,
+    roundState: null,
+  };
+}
+
+/** Starts, updates or clears the clock for the round in progress. */
+export function setDailyRoundState(
+  progress: PlayerProgress,
+  dateKey: string,
+  questionIds: string[],
+  roundState: RoundState | null,
+): PlayerProgress {
+  const existing = progress.daily[dateKey] ?? emptyDailyRecord(dateKey, questionIds);
+  if (existing.completedAt) return progress;
+  return {
+    ...progress,
+    daily: pruneDaily({ ...progress.daily, [dateKey]: { ...existing, roundState } }, dateKey),
+  };
+}
+
 /** Appends one round's answer; completes the day when the last round lands. */
 export function recordDailyAnswer(
   progress: PlayerProgress,
@@ -149,20 +176,14 @@ export function recordDailyAnswer(
   questionIds: string[],
   answer: AnswerRecord,
 ): PlayerProgress {
-  const existing: DailyRecord = progress.daily[dateKey] ?? {
-    dateKey,
-    puzzleNumber: puzzleNumber(dateKey),
-    questionIds,
-    answers: [],
-    completedAt: null,
-    totalScore: 0,
-  };
+  const existing: DailyRecord = progress.daily[dateKey] ?? emptyDailyRecord(dateKey, questionIds);
   if (existing.completedAt || existing.answers.some((a) => a.round === answer.round)) return progress;
 
   const answers = [...existing.answers, answer];
   const record: DailyRecord = {
     ...existing,
     answers,
+    roundState: null,
     totalScore: answers.reduce((sum, a) => sum + a.points, 0),
   };
   const next: PlayerProgress = { ...progress, daily: pruneDaily({ ...progress.daily, [dateKey]: record }, dateKey) };
