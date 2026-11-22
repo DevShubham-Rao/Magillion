@@ -1,0 +1,230 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-obsidian: #0b0d13;
+  --color-grimoire: #121521;
+  --color-vellum: #1a1e2c;
+  --color-rule: #2b2f3e;
+  --color-gold: #c8aa6e;
+  --color-gold-pale: #e8d9ae;
+  --color-gold-deep: #8a6f3c;
+  --color-parchment: #e6dcc3;
+  --color-ash: #9a958a;
+  --color-ink: #231d14;
+  --color-ember: #d9714f;
+
+  --color-mana-w: #f3e6c0;
+  --color-mana-u: #4a95d8;
+  --color-mana-b: #a48fb5;
+  --color-mana-r: #e0603f;
+  --color-mana-g: #4ba36b;
+
+  --font-display: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  --font-flavor: 'Cormorant Garamond', 'Garamond', Georgia, serif;
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+
+  --animate-prismatic: prismatic 6s linear infinite;
+  --animate-slow-pulse: slow-pulse 2.4s ease-in-out infinite;
+
+  @keyframes prismatic {
+    to {
+      filter: hue-rotate(360deg);
+    }
+  }
+  @keyframes slow-pulse {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background: var(--color-obsidian);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    margin: 0;
+    background-color: var(--color-obsidian);
+    background-image:
+      radial-gradient(1200px 700px at 50% -10%, rgba(200, 170, 110, 0.09), transparent 60%),
+      radial-gradient(900px 600px at 85% 110%, rgba(74, 149, 216, 0.06), transparent 60%),
+      radial-gradient(900px 600px at 10% 100%, rgba(164, 143, 181, 0.05), transparent 60%);
+    color: var(--color-parchment);
+    font-family: var(--font-sans);
+    font-feature-settings: 'tnum' 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Parchment grain over the whole table. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.07;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .95 0 0 0 0 .85 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-gold-pale);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: rgba(200, 170, 110, 0.35);
+    color: #fff8e6;
+  }
+
+  img {
+    -webkit-user-drag: none;
+  }
+}
+
+@layer components {
+  .gold-text {
+    background: linear-gradient(180deg, #f8ecc8 0%, #d9bf86 38%, #c8aa6e 55%, #8a6f3c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* An engraved slab: inset gold hairline, bevel, and a deep drop shadow. */
+  .engraved-panel {
+    background:
+      linear-gradient(180deg, rgba(232, 217, 174, 0.035), transparent 30%),
+      linear-gradient(180deg, rgba(26, 30, 44, 0.94), rgba(14, 16, 24, 0.96));
+    border: 1px solid rgba(200, 170, 110, 0.32);
+    box-shadow:
+      inset 0 1px 0 rgba(232, 217, 174, 0.1),
+      inset 0 0 0 5px rgba(11, 13, 19, 0.55),
+      inset 0 0 0 6px rgba(200, 170, 110, 0.13),
+      0 40px 80px -40px rgba(0, 0, 0, 0.9);
+    border-radius: 3px;
+  }
+
+  .btn-gold {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    padding: 0.6rem 1.4rem;
+    border-radius: 2px;
+    border: 1px solid #f1e2b6;
+    background: linear-gradient(180deg, #ead39a 0%, #c8aa6e 48%, #a68748 100%);
+    color: #17130b;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 0.95rem;
+    letter-spacing: 0.04em;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 250, 230, 0.7),
+      inset 0 -2px 0 rgba(90, 66, 24, 0.45),
+      0 10px 24px -12px rgba(200, 170, 110, 0.7);
+    transition:
+      filter 0.15s ease,
+      transform 0.15s ease;
+  }
+  .btn-gold:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  .btn-gold:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .btn-gold:disabled {
+    cursor: not-allowed;
+    filter: grayscale(0.6) brightness(0.7);
+  }
+
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    padding: 0.55rem 1.1rem;
+    border-radius: 2px;
+    border: 1px solid rgba(200, 170, 110, 0.38);
+    background: rgba(11, 13, 19, 0.4);
+    color: var(--color-gold-pale);
+    font-weight: 600;
+    font-size: 0.875rem;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: rgba(200, 170, 110, 0.1);
+    border-color: rgba(200, 170, 110, 0.65);
+  }
+  .btn-ghost:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 999px;
+    border: 1px solid rgba(200, 170, 110, 0.25);
+    color: var(--color-gold-pale);
+    background: rgba(11, 13, 19, 0.5);
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .icon-btn:hover {
+    background: rgba(200, 170, 110, 0.1);
+    border-color: rgba(200, 170, 110, 0.55);
+  }
+  @media (min-width: 640px) {
+    .icon-btn {
+      width: 2.5rem;
+      height: 2.5rem;
+    }
+  }
+
+  /* Card text box parchment. */
+  .parchment {
+    background-color: #e9dfc6;
+    background-image:
+      radial-gradient(120% 80% at 50% 0%, rgba(255, 250, 235, 0.65), transparent 70%),
+      radial-gradient(90% 70% at 100% 100%, rgba(150, 120, 70, 0.22), transparent 70%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .35 0 0 0 0 .2 0 0 0 .22 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)'/%3E%3C/svg%3E");
+    color: var(--color-ink);
+  }
+
+  .thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(90, 70, 40, 0.45) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
