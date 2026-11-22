@@ -1,6 +1,6 @@
 # Magillion
 
-A daily *Magic: The Gathering* trivia game where the most obscure valid answer wins. Each round asks you to name a card ("Name a Planeswalker."). Any real paper card counts, banned ones included, as long as it fits the prompt. The less it's played, in whichever format plays it most, the more points it scores.
+A daily *Magic: The Gathering* trivia game where the most obscure valid answer wins. **The Daily Planeswalk** deals seven prompts ("Name a Planeswalker.", "Name a card with Landfall.", "Name a mono-blue card."). Any real paper card counts, banned ones included, as long as it fits the prompt. The less it's played, in whichever format plays it most, the more points it scores, and every point carries your spark farther from Dominaria, across ten planes, toward the Blind Eternities.
 
 Cards resolve live against [Scryfall](https://scryfall.com): names, art, legality and EDHREC rank. 60-card popularity comes from a static snapshot of the official [Magic Online decklists](https://www.mtgo.com/decklists), rebuilt nightly. There's no backend and no API key.
 
@@ -16,9 +16,34 @@ npm run data:metagame   # rebuild public/data/metagame.json (see below)
 
 Requires Node 20+.
 
+## The Planeswalk
+
+The day opens on a landing screen: **Begin the Planeswalk**. Your running total moves a spark down a path of planes (`data/planes.ts`), and the backdrop takes on each plane's colors as you arrive:
+
+| Plane | Reached at |
+|---|---|
+| Dominaria | 0 |
+| Ravnica | 300 |
+| Theros | 700 |
+| Innistrad | 1,200 |
+| Zendikar | 1,800 |
+| Kamigawa | 2,500 |
+| Kaldheim | 3,300 |
+| New Phyrexia | 4,200 |
+| Ulgrotha | 5,200 |
+| The Blind Eternities | 6,300 |
+
+Seven commons (about 150 points each with a quick answer) stay around Ravnica and Theros; a perfect day is about 7,700. Wide screens show the whole path beside the game; phones get a one-line bar. The summary and share text say where you ended up.
+
+Everyone gets the same seven prompts on a UTC day, each from a different category, chosen from a pool of about 480 (`data/questionPool.ts`).
+
+### Test tools
+
+In dev builds, or on any URL with `?test`, a **Test tools** button sits in the bottom-left corner. **Skip to the next day** moves "today" forward a day so you can play a fresh Planeswalk without waiting for midnight. While a test day is active, progress is saved under a separate localStorage key (`magillion.progress.test.v1`), so your real results and streak stay untouched. **Back to the real date** returns to them; **Wipe test results and replay** clears the test saves. The panel also lists the day's prompts.
+
 ## How a round works
 
-The prompt stays sealed until you start the round. Then you get **45 seconds** and **3 attempts**. There is no suggestion list: you type a name and lock it in.
+The prompt stays hidden until you start the round. Then you get **45 seconds** and **3 attempts**. There is no suggestion list: you type a name and lock it in.
 
 1. **Resolve.** `services/answerResolver.ts` turns the text into one card:
    - An exact name (either face) is taken at its word: `Ice` is *Fire // Ice*.
@@ -100,12 +125,15 @@ src/
     audioCues.ts            Procedural Web Audio cues per tier
     share.ts                Spoiler-free share text
   data/
-    questionPool.ts         10 active prompts, validator factories, seeded daily selector
+    questionPool.ts         ~480 prompts in tables, seeded daily selector (7 categories a day)
+    questionFactories.ts    Validator builders: types, keywords, subtypes, colors, text, mana, names
+    planes.ts               The ten planes of the Planeswalk and where your total puts you
     rarityTiers.ts          Tier thresholds and visual tokens
     gameRules.ts            Round length, attempts, speed bonus
   lib/fuzzy.ts              Typo-tolerant name matching
-  hooks/useGame.ts          Round clock, attempts and state machine for both modes
-  components/               Foil card, reveal, play breakdown, round timer, answer field, summary, SVG art
+  hooks/useGame.ts          Round clock, attempts and the daily state machine
+  components/               Landing, planar path and sky, foil card, reveal, play breakdown, round timer,
+                            answer field, summary, test tools, SVG art
 scripts/
   build-metagame.ts         Nightly 60-card snapshot builder
   metagame/parse.ts         Pure parsing and counting (unit tested)
@@ -113,7 +141,11 @@ scripts/
 
 ### Adding a prompt
 
-Use a factory in `data/questionPool.ts` (`typeQuestion`, `keywordCreatureQuestion`, `statQuestion`, `subtypeQuestion`) or write a `validatorFn` by hand, then append it to `QUESTION_POOL`. Mark it `status: 'experimental'` to keep it out of the daily rotation. The daily selector shuffles only `active` prompts with a PRNG seeded by the UTC date, so changing the pool changes future gauntlets; a gauntlet already in progress keeps its stored prompts.
+Most prompts are one row in a table in `data/questionPool.ts`: add a creature type to `CREATURE_TYPES`, a keyword to `CARD_KEYWORDS`, a phrase to `TEXT_PROMPTS`, and so on. For something new, use a factory from `data/questionFactories.ts` (`typeQuestion`, `faceTypesQuestion`, `keywordQuestion`, `keywordCreatureQuestion`, `subtypeQuestion`, `textQuestion`, `colorsQuestion`, `colorTypeQuestion`, `statQuestion`, `cardQuestion`) or write a `validatorFn` by hand.
+
+`scryfallQueryHint` must be valid Scryfall syntax that matches every card the validator accepts (it may match more): the answer box completes partial names inside it, and the reveal links to it. Wrap any `or` in parentheses. Mark a prompt `status: 'experimental'` to keep it out of the rotation, and never rename an id, since each day's results store them.
+
+The daily selector shuffles the categories with a PRNG seeded by the UTC date, takes seven, and picks one prompt from each, so changing the pool changes future days; a day already started keeps its stored prompts.
 
 ### Tuning or adding a format
 
@@ -123,7 +155,7 @@ To track another Magic Online format, add it to `METAGAME_FORMATS` in `types/met
 
 ### Swapping storage for a backend
 
-The game only talks to a `ProgressRepository` (`load` / `save`). All progress changes (`recordDailyAnswer`, streaks, practice stats) are pure functions over one `PlayerProgress` document, so they can run server-side unchanged.
+The game only talks to a `ProgressRepository` (`load` / `save`). All progress changes (`recordDailyAnswer`, streaks, stats) are pure functions over one `PlayerProgress` document, so they can run server-side unchanged.
 
 ## Credits
 

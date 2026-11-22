@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACTIVE_QUESTIONS, DAILY_QUESTION_COUNT, questionById, selectDailyQuestions } from './questionPool';
+import { ACTIVE_QUESTIONS, DAILY_QUESTION_COUNT, QUESTION_POOL, questionById, selectDailyQuestions } from './questionPool';
 import { makeCard } from '../test/fixtures';
 import { checkCardEligibility } from '../services/cardEligibility';
 import { sanitizeInput } from '../services/scryfallService';
@@ -24,8 +24,104 @@ describe('daily selection', () => {
     expect(new Set(days).size).toBeGreaterThan(1);
   });
 
-  it('ships ten active prompts', () => {
-    expect(ACTIVE_QUESTIONS).toHaveLength(10);
+  it('deals seven prompts, each from a different category', () => {
+    for (const day of ['2026-11-22', '2026-11-23', '2027-01-01', '2027-06-15']) {
+      const picked = selectDailyQuestions(day);
+      expect(picked).toHaveLength(7);
+      expect(new Set(picked.map((x) => x.category)).size).toBe(7);
+    }
+  });
+
+  it('ships a large pool with unique ids, keeping the original prompt ids', () => {
+    expect(ACTIVE_QUESTIONS.length).toBeGreaterThan(300);
+    const ids = QUESTION_POOL.map((x) => x.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const originals = ['planeswalker', 'legendary-creature', 'commander-legal', 'enchantment', 'artifact', 'instant', 'sorcery'];
+    originals.push('land', 'flying-creature', 'activated-ability', 'power-seven', 'dragon', 'phyrexian');
+    for (const id of originals) expect(questionById(id), id).toBeDefined();
+  });
+
+  it('gives every prompt a hint and a self-contained Scryfall query', () => {
+    for (const x of QUESTION_POOL) {
+      expect(x.hint.length, x.id).toBeGreaterThan(10);
+      const opens = (x.scryfallQueryHint.match(/\(/g) ?? []).length;
+      const closes = (x.scryfallQueryHint.match(/\)/g) ?? []).length;
+      expect(opens, x.id).toBe(closes);
+      // A top-level "or" would break when the query is combined with other filters.
+      expect(/ or /.test(x.scryfallQueryHint.replace(/\([^)]*\)/g, '')), x.id).toBe(false);
+    }
+  });
+});
+
+describe('keyword detection', () => {
+  const card = (oracle_text: string, type_line = 'Creature — Test') => makeCard({ name: 'K', type_line, oracle_text });
+  const has = (id: string, text: string, type?: string) => q(id).validatorFn(card(text, type)).ok;
+
+  it('reads keyword lines, costs and dashes, but not mentions', () => {
+    expect(has('creature-ward', 'Flying\nWard—Pay 2 life.')).toBe(true);
+    expect(has('creature-ward', 'Ward {2}')).toBe(true);
+    expect(has('keyword-kicker', 'Kicker {1}{G} (You may pay an additional {1}{G} as you cast this spell.)', 'Sorcery')).toBe(true);
+    expect(has('keyword-flashback', 'Flashback—Sacrifice a creature.', 'Sorcery')).toBe(true);
+    expect(has('ability-landfall', 'Landfall — Whenever a land you control enters, draw a card.')).toBe(true);
+    expect(has('flying-creature', 'Creatures you control with flying get +1/+1.')).toBe(false);
+    expect(has('creature-flash', 'Flashback {2}{U}')).toBe(false);
+    expect(has('keyword-cycling', 'Basic landcycling {1}{G}')).toBe(true);
+    expect(has('keyword-landwalk', 'Nonbasic landwalk')).toBe(true);
+    expect(has('creature-protection', 'Protection from red')).toBe(true);
+    expect(has('creature-annihilator', 'Annihilator 2')).toBe(true);
+  });
+
+  it('counts Changelings as every creature type', () => {
+    expect(q('sliver').validatorFn(card('Changeling (This card is every creature type.)', 'Creature — Shapeshifter')).ok).toBe(true);
+    expect(q('sliver').validatorFn(card('Flying', 'Creature — Bird')).ok).toBe(false);
+  });
+});
+
+describe('new prompt kinds', () => {
+  it('checks colors per face', () => {
+    const valki = makeCard({
+      name: 'Valki, God of Lies // Tibalt, Cosmic Impostor',
+      layout: 'modal_dfc',
+      type_line: 'Legendary Creature — God // Legendary Planeswalker — Tibalt',
+      card_faces: [
+        { object: 'card_face', name: 'Valki, God of Lies', type_line: 'Legendary Creature — God', oracle_text: '', colors: ['B'] },
+        { object: 'card_face', name: 'Tibalt, Cosmic Impostor', type_line: 'Legendary Planeswalker — Tibalt', oracle_text: '', colors: ['R'] },
+      ],
+    });
+    expect(q('black-creature').validatorFn(valki).ok).toBe(true);
+    expect(q('red-creature').validatorFn(valki).ok).toBe(false);
+    expect(q('red-planeswalker').validatorFn(valki).ok).toBe(true);
+    expect(q('multicolored').validatorFn(valki).ok).toBe(true);
+    expect(q('mono-red').validatorFn(makeCard({ name: 'Bolt', colors: ['R'] })).ok).toBe(true);
+    expect(q('mono-red').validatorFn(makeCard({ name: 'Boros', colors: ['R', 'W'] })).ok).toBe(false);
+  });
+
+  it('checks mana value, costs and stats', () => {
+    expect(q('mv-seven-plus').validatorFn(makeCard({ name: 'Big', cmc: 8 })).ok).toBe(true);
+    expect(q('mv-zero-spell').validatorFn(makeCard({ name: 'Mox', cmc: 0, mana_cost: '{0}' })).ok).toBe(true);
+    expect(q('mv-zero-spell').validatorFn(makeCard({ name: 'Land', cmc: 0, type_line: 'Land' })).ok).toBe(false);
+    expect(q('no-mana-cost').validatorFn(makeCard({ name: 'Mox', cmc: 0, mana_cost: '{0}' })).ok).toBe(false);
+    expect(q('no-mana-cost').validatorFn(makeCard({ name: 'Ancestral Vision', cmc: 0, mana_cost: '', type_line: 'Sorcery' })).ok).toBe(true);
+    expect(q('phyrexian-mana').validatorFn(makeCard({ name: 'Probe', mana_cost: '{U/P}' })).ok).toBe(true);
+    expect(q('hybrid-mana').validatorFn(makeCard({ name: 'Probe', mana_cost: '{U/P}' })).ok).toBe(false);
+    expect(q('one-one').validatorFn(makeCard({ name: 'Elf', type_line: 'Creature — Elf', power: '1', toughness: '1' })).ok).toBe(true);
+    expect(q('one-one').validatorFn(makeCard({ name: 'Elf', type_line: 'Creature — Elf', power: '1', toughness: '2' })).ok).toBe(false);
+  });
+
+  it('checks names, layouts and lists', () => {
+    expect(q('starts-with-q').validatorFn(makeCard({ name: 'Quirion Ranger' })).ok).toBe(true);
+    expect(q('starts-with-q').validatorFn(makeCard({ name: 'Ranger of Quirion' })).ok).toBe(false);
+    expect(q('one-word-name').validatorFn(makeCard({ name: 'Counterspell' })).ok).toBe(true);
+    expect(q('long-name').validatorFn(makeCard({ name: 'Jace, the Mind Sculptor of Doom' })).ok).toBe(true);
+    expect(q('split-card').validatorFn(makeCard({ name: 'Fire // Ice', layout: 'split' })).ok).toBe(true);
+    expect(q('restricted-vintage').validatorFn(makeCard({ name: 'Black Lotus', legalities: { vintage: 'restricted' } })).ok).toBe(true);
+    expect(q('restricted-vintage').validatorFn(makeCard({ name: 'Sol Ring', legalities: { vintage: 'legal' } })).ok).toBe(false);
+    expect(q('kindred').validatorFn(makeCard({ name: 'Tarfire', type_line: 'Kindred Instant — Goblin' })).ok).toBe(true);
+    expect(
+      q('trigger-dies').validatorFn(
+        makeCard({ name: 'Blood Artist', oracle_text: 'Whenever Blood Artist or another creature dies, target player loses 1 life.' }),
+      ).ok,
+    ).toBe(true);
   });
 });
 

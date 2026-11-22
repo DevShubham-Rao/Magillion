@@ -5,6 +5,8 @@ import { RARITY_TIERS } from '../data/rarityTiers';
 import { RarityGem } from './art/RarityGem';
 import { FiligreeDivider, FiligreeFrame } from './art/Filigree';
 import { MAX_ATTEMPTS, MAX_SPEED_BONUS, ROUND_SECONDS } from '../data/gameRules';
+import { DAILY_QUESTION_COUNT } from '../data/questionPool';
+import { PLANES } from '../data/planes';
 
 export function HowToPlay({ open, onClose }: { open: boolean; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -82,10 +84,23 @@ export function HowToPlay({ open, onClose }: { open: boolean; onClose: () => voi
                 {MAX_SPEED_BONUS} bonus points on top.
               </li>
               <li>
-                Each card answers once per gauntlet. Everyone gets the same five prompts each day, and a new gauntlet
-                opens at midnight UTC. Practice mode deals endless prompts whenever you like.
+                Every point carries your spark farther on the day’s Planeswalk, from Dominaria out toward the Blind
+                Eternities. Everyone gets the same {DAILY_QUESTION_COUNT} prompts each day, each card answers once, and a new
+                Planeswalk opens at midnight UTC.
               </li>
             </ol>
+
+            <h3 className="mt-8 text-center font-display text-lg font-semibold text-gold-pale">The planes</h3>
+            <ul className="mx-auto mt-4 grid max-w-md grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+              {PLANES.map((plane) => (
+                <li key={plane.id} className="flex items-baseline justify-between gap-3">
+                  <span className="font-display font-semibold" style={{ color: plane.accent }}>
+                    {plane.name}
+                  </span>
+                  <span className="tabular text-ash">{plane.reach.toLocaleString('en-US')}</span>
+                </li>
+              ))}
+            </ul>
 
             <h3 className="mt-8 text-center font-display text-lg font-semibold text-gold-pale">Obscurity tiers</h3>
             <ul className="mx-auto mt-4 max-w-md divide-y divide-gold/10">
@@ -107,7 +122,7 @@ export function HowToPlay({ open, onClose }: { open: boolean; onClose: () => voi
 
             <div className="mt-8 text-center">
               <button type="button" className="btn-gold" onClick={onClose}>
-                Start playing
+                Close
               </button>
             </div>
           </motion.div>

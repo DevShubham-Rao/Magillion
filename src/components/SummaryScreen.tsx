@@ -1,18 +1,19 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Copy } from 'lucide-react';
-import type { AnswerRecord, GameMode, PlayerProgress } from '../types/game';
+import type { AnswerRecord, PlayerProgress } from '../types/game';
 import type { QuestionDefinition } from '../types/mtg';
 import { tierById } from '../data/rarityTiers';
 import { questionById } from '../data/questionPool';
-import { buildDailyShareText, buildPracticeShareText, copyText, answerEmoji } from '../services/share';
+import { buildDailyShareText, copyText, answerEmoji } from '../services/share';
+import { PLANES, planarPosition } from '../data/planes';
 import { formatCountdown, formatDateKey } from '../lib/dates';
 import { useCountdown } from '../hooks/useCountdown';
-import { Astrolabe } from './art/Astrolabe';
 import { RarityGem } from './art/RarityGem';
 import { FiligreeDivider } from './art/Filigree';
 import { ScoreTally } from './ScoreTally';
 import { toNumeral } from './GauntletTrack';
+import { PlanarRail, Spark } from './Planeswalk';
 
 const STATUS_LABEL: Record<AnswerRecord['status'], string> = {
   answered: '',
@@ -65,7 +66,6 @@ function AnswerTile({ answer, question, index }: { answer: AnswerRecord; questio
 }
 
 interface SummaryScreenProps {
-  mode: GameMode;
   dateKey: string;
   puzzleNumber: number;
   answers: AnswerRecord[];
@@ -73,12 +73,9 @@ interface SummaryScreenProps {
   streak: number;
   newDayAvailable: boolean;
   onStartNewDay: () => void;
-  onPractice: () => void;
-  onRestartPractice: () => void;
 }
 
 export function SummaryScreen({
-  mode,
   dateKey,
   puzzleNumber,
   answers,
@@ -86,17 +83,14 @@ export function SummaryScreen({
   streak,
   newDayAvailable,
   onStartNewDay,
-  onPractice,
-  onRestartPractice,
 }: SummaryScreenProps) {
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
   const { msRemaining } = useCountdown();
   const total = answers.reduce((sum, a) => sum + a.points, 0);
-  const isDaily = mode === 'daily';
   const url = typeof window !== 'undefined' ? window.location.origin : '';
-  const shareText = isDaily
-    ? buildDailyShareText({ puzzleNumber, answers, streak, url })
-    : buildPracticeShareText({ answers, url });
+  const shareText = buildDailyShareText({ puzzleNumber, answers, streak, url });
+  const { plane, index, next } = planarPosition(total);
+  const stayedHome = index === 0;
 
   const onCopy = async () => {
     const ok = await copyText(shareText);
@@ -104,31 +98,39 @@ export function SummaryScreen({
     window.setTimeout(() => setCopied('idle'), 2400);
   };
 
-  const stats = isDaily
-    ? [
-        { label: 'Current streak', value: streak },
-        { label: 'Best streak', value: progress.stats.maxStreak },
-        { label: 'Gauntlets finished', value: progress.stats.dailiesCompleted },
-        { label: 'Best score', value: progress.stats.bestDailyScore.toLocaleString('en-US') },
-      ]
-    : [
-        { label: 'Rounds this run', value: answers.length },
-        { label: 'Best run', value: progress.practice.bestRunScore.toLocaleString('en-US') },
-        { label: 'Practice rounds', value: progress.practice.roundsPlayed },
-        { label: 'Best answer', value: progress.practice.bestAnswer ? progress.practice.bestAnswer.points : '—' },
-      ];
+  const stats = [
+    { label: 'Current streak', value: streak },
+    { label: 'Best streak', value: progress.stats.maxStreak },
+    { label: 'Walks finished', value: progress.stats.dailiesCompleted },
+    { label: 'Best score', value: progress.stats.bestDailyScore.toLocaleString('en-US') },
+  ];
 
   return (
     <section aria-labelledby="summary-title" className="mx-auto w-full max-w-5xl text-center">
-      <Astrolabe size={112} className="mx-auto" />
-      <h2 id="summary-title" className="mt-4 font-display text-3xl font-bold text-parchment sm:text-4xl">
-        {isDaily ? `Gauntlet #${puzzleNumber} complete` : 'Practice run ended'}
-      </h2>
-      <p className="mt-1 font-flavor text-lg italic text-parchment/65">
-        {isDaily ? formatDateKey(dateKey) : `${answers.length} prompt${answers.length === 1 ? '' : 's'} answered`}
+      <p className="font-flavor text-lg italic text-parchment/65">
+        Planeswalk #{puzzleNumber}, {formatDateKey(dateKey)}
+      </p>
+      <motion.div
+        className="mx-auto mt-5 flex w-fit items-center gap-3"
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.9, ease: 'easeOut' }}
+      >
+        <Spark color={plane.accent} size={40} />
+        <h2 id="summary-title" className="font-display text-3xl font-bold sm:text-4xl" style={{ color: plane.accent }}>
+          {stayedHome ? 'You stayed on Dominaria' : `You walked to ${plane.name}`}
+        </h2>
+      </motion.div>
+      <p className="mt-2 font-flavor text-lg italic text-parchment/70">
+        {plane.line} Plane {index + 1} of {PLANES.length}
+        {next ? `, ${(next.reach - total).toLocaleString('en-US')} points short of ${next.name}.` : '.'}
       </p>
 
       <ScoreTally points={total} delay={0.2} suffix="points" className="mt-6 justify-center" />
+
+      <div className="mx-auto mt-8 h-[400px] max-w-[15rem] lg:hidden">
+        <PlanarRail total={total} />
+      </div>
 
       <FiligreeDivider className="mx-auto my-8 max-w-full" />
 
@@ -149,15 +151,6 @@ export function SummaryScreen({
             {copied === 'copied' ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
             {copied === 'copied' ? 'Copied' : 'Copy results'}
           </button>
-          {isDaily ? (
-            <button type="button" className="btn-ghost" onClick={onPractice}>
-              Play practice rounds
-            </button>
-          ) : (
-            <button type="button" className="btn-ghost" onClick={onRestartPractice}>
-              Start a new run
-            </button>
-          )}
         </div>
         <p className="mt-2 min-h-5 text-xs text-ash" role="status">
           {copied === 'copied'
@@ -177,19 +170,17 @@ export function SummaryScreen({
         ))}
       </dl>
 
-      {isDaily && (
-        <div className="mt-8" role="timer" aria-live="off">
-          {newDayAvailable ? (
-            <button type="button" className="btn-gold" onClick={onStartNewDay}>
-              Start today's gauntlet
-            </button>
-          ) : (
-            <p className="text-sm text-ash">
-              Next gauntlet in <span className="tabular font-display text-lg font-semibold text-gold-pale">{formatCountdown(msRemaining)}</span>
-            </p>
-          )}
-        </div>
-      )}
+      <div className="mt-8" role="timer" aria-live="off">
+        {newDayAvailable ? (
+          <button type="button" className="btn-gold" onClick={onStartNewDay}>
+            Begin today’s Planeswalk
+          </button>
+        ) : (
+          <p className="text-sm text-ash">
+            Next Planeswalk in <span className="tabular font-display text-lg font-semibold text-gold-pale">{formatCountdown(msRemaining)}</span>
+          </p>
+        )}
+      </div>
     </section>
   );
 }

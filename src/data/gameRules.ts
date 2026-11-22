@@ -1,4 +1,4 @@
-/** Round rules shared by the daily gauntlet and practice mode. */
+/** Round rules for the daily Planeswalk. */
 
 /** Seconds to lock in an answer. Time spent waiting on Scryfall is given back. */
 export const ROUND_SECONDS = 45;

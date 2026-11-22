@@ -165,6 +165,8 @@ export interface CardFace {
   manaCost: string;
   typeLine: string;
   oracleText: string;
+  /** This face's colors, or the card's when Scryfall only colors the whole card. */
+  colors: string[];
   flavorText?: string;
   power?: string;
   toughness?: string;
@@ -186,7 +188,12 @@ export type QuestionCategory =
   | 'format'
   | 'stats'
   | 'lore'
-  | 'plane';
+  | 'plane'
+  | 'color'
+  | 'mana'
+  | 'text'
+  | 'layout'
+  | 'name';
 
 /** `active` questions rotate into gauntlets; `experimental` ones are opt-in. */
 export type QuestionStatus = 'active' | 'experimental';

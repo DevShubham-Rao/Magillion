@@ -5,8 +5,46 @@ export const LAUNCH_DATE_KEY = '2026-11-22';
 
 const DAY_MS = 86_400_000;
 
-export function utcDateKey(date: Date = new Date()): string {
-  return date.toISOString().slice(0, 10);
+/* ------------------------------------------------------------------------ */
+/* Test day offset                                                           */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * For testing only: shifts "today" forward by whole days so a new gauntlet
+ * can be played without waiting for midnight. Set from the test tools panel
+ * and kept in localStorage; while it's non-zero, progress is saved under a
+ * separate key so real results stay untouched.
+ */
+const TEST_OFFSET_KEY = 'magillion.testDayOffset';
+
+function readTestOffset(): number {
+  try {
+    const value = Number(globalThis.localStorage?.getItem(TEST_OFFSET_KEY) ?? 0);
+    return Number.isFinite(value) ? Math.trunc(value) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+let testOffsetDays = readTestOffset();
+
+export function testDayOffset(): number {
+  return testOffsetDays;
+}
+
+export function setTestDayOffset(days: number): void {
+  testOffsetDays = Math.trunc(days);
+  try {
+    if (testOffsetDays === 0) globalThis.localStorage?.removeItem(TEST_OFFSET_KEY);
+    else globalThis.localStorage?.setItem(TEST_OFFSET_KEY, String(testOffsetDays));
+  } catch {
+    // Storage blocked: the offset lasts until the page reloads.
+  }
+}
+
+/** Today's UTC date key (shifted by the test offset), or the key for `date`. */
+export function utcDateKey(date?: Date): string {
+  return (date ?? new Date(Date.now() + testOffsetDays * DAY_MS)).toISOString().slice(0, 10);
 }
 
 function keyToUtcMs(key: string): number {

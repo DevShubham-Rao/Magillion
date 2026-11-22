@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { ExternalLink } from 'lucide-react';
-import type { GameMode, RevealState } from '../types/game';
+import type { RevealState } from '../types/game';
 import { FoilCard } from './FoilCard';
 import { ParticleBurst } from './ParticleBurst';
 import { RarityGem } from './art/RarityGem';
@@ -10,17 +10,19 @@ import { ObscurityMeter } from './ObscurityMeter';
 import { scryfallSearchUrl } from '../services/scryfallService';
 import { CARD_POOL_QUERY } from '../services/cardEligibility';
 import { PlayBreakdown } from './PlayBreakdown';
+import { PlaneArrival } from './Planeswalk';
+import type { Plane } from '../data/planes';
 
 interface RevealPanelProps {
   reveal: RevealState;
-  mode: GameMode;
   roundLabel: string;
   isLastRound: boolean;
+  /** The plane this answer walked you to, if it reached a new one. */
+  arrival?: { plane: Plane; skipped: number } | null;
   onNext: () => void;
-  onEndRun?: () => void;
 }
 
-export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onEndRun }: RevealPanelProps) {
+export function RevealPanel({ reveal, roundLabel, isLastRound, arrival, onNext }: RevealPanelProps) {
   const { card, score, question, answer } = reveal;
   const { tier } = score;
   const nextRef = useRef<HTMLButtonElement>(null);
@@ -32,13 +34,15 @@ export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onE
   }, []);
 
   const notes = [...reveal.notes, ...score.notes].filter((n): n is string => Boolean(n));
-  const nextLabel = mode === 'daily' ? (isLastRound ? 'See your results' : 'Next round') : 'Next prompt';
+  const nextLabel = isLastRound ? 'See where you walked' : 'Next round';
   const prismatic = tier.id === 'serialized';
 
   return (
+    <>
+    {arrival && <PlaneArrival plane={arrival.plane} skipped={arrival.skipped} />}
     <section
       aria-labelledby="reveal-title"
-      className="mx-auto grid w-full max-w-5xl items-center gap-10 lg:grid-cols-[auto_minmax(0,1fr)] lg:gap-16"
+      className="mx-auto grid w-full max-w-5xl items-center gap-10 lg:grid-cols-[auto_minmax(0,1fr)] lg:gap-14"
     >
       <div className="relative mx-auto">
         <ParticleBurst tier={tier} />
@@ -113,11 +117,6 @@ export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onE
           <button ref={nextRef} type="button" className="btn-gold" onClick={onNext}>
             {nextLabel}
           </button>
-          {mode === 'practice' && onEndRun && (
-            <button type="button" className="btn-ghost" onClick={onEndRun}>
-              End run
-            </button>
-          )}
         </div>
         <div className="mt-5 flex flex-wrap justify-center gap-x-5 gap-y-2 text-sm lg:justify-start">
           <a
@@ -139,5 +138,6 @@ export function RevealPanel({ reveal, mode, roundLabel, isLastRound, onNext, onE
         </div>
       </motion.div>
     </section>
+    </>
   );
 }

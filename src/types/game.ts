@@ -1,7 +1,5 @@
 import type { QuestionDefinition, RarityTierId, ScoreResult, ScryfallCard } from './mtg';
 
-export type GameMode = 'daily' | 'practice';
-
 export type GameView = 'ready' | 'question' | 'reveal' | 'lost' | 'summary';
 
 /** The slice of a Scryfall card we persist with an answer. */
@@ -67,14 +65,6 @@ export interface PlayerStats {
   tierCounts: Record<RarityTierId, number>;
 }
 
-export interface PracticeStats {
-  runsCompleted: number;
-  roundsPlayed: number;
-  bestRunScore: number;
-  bestRunRounds: number;
-  bestAnswer: { cardName: string; points: number; questionId: string } | null;
-}
-
 export interface PlayerSettings {
   muted: boolean;
   seenIntro: boolean;
@@ -88,7 +78,6 @@ export interface PlayerProgress {
   version: 1;
   daily: Record<string, DailyRecord>;
   stats: PlayerStats;
-  practice: PracticeStats;
   settings: PlayerSettings;
 }
 

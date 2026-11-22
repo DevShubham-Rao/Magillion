@@ -1,6 +1,6 @@
 import type { AnswerRecord, DailyRecord, PlayerProgress, PlayerSettings, RoundState } from '../types/game';
 import type { RarityTierId } from '../types/mtg';
-import { addDays, daysBetween, puzzleNumber } from '../lib/dates';
+import { addDays, daysBetween, puzzleNumber, testDayOffset } from '../lib/dates';
 
 /**
  * Player progress persistence.
@@ -13,6 +13,8 @@ import { addDays, daysBetween, puzzleNumber } from '../lib/dates';
  */
 
 export const STORAGE_KEY = 'magillion.progress.v1';
+/** Where progress goes while the test day offset is on, so real results stay clean. */
+export const TEST_STORAGE_KEY = 'magillion.progress.test.v1';
 const DAILY_HISTORY_DAYS = 120;
 
 const EMPTY_TIER_COUNTS: Record<RarityTierId, number> = {
@@ -37,7 +39,6 @@ export function createEmptyProgress(): PlayerProgress {
       totalPoints: 0,
       tierCounts: { ...EMPTY_TIER_COUNTS },
     },
-    practice: { runsCompleted: 0, roundsPlayed: 0, bestRunScore: 0, bestRunRounds: 0, bestAnswer: null },
     settings: { muted: false, seenIntro: false },
   };
 }
@@ -55,7 +56,6 @@ export function migrateProgress(raw: unknown): PlayerProgress {
       ...stored.stats,
       tierCounts: { ...EMPTY_TIER_COUNTS, ...stored.stats?.tierCounts },
     },
-    practice: { ...empty.practice, ...stored.practice },
     settings: { ...empty.settings, ...stored.settings },
   };
 }
@@ -197,34 +197,6 @@ export function activeStreak(progress: PlayerProgress, todayKey: string): number
   return last === todayKey || last === addDays(todayKey, -1) ? progress.stats.currentStreak : 0;
 }
 
-export function recordPracticeAnswer(progress: PlayerProgress, answer: AnswerRecord): PlayerProgress {
-  const best = progress.practice.bestAnswer;
-  const isBest = answer.card && (!best || answer.points > best.points);
-  return {
-    ...progress,
-    practice: {
-      ...progress.practice,
-      roundsPlayed: progress.practice.roundsPlayed + 1,
-      bestAnswer: isBest && answer.card
-        ? { cardName: answer.card.name, points: answer.points, questionId: answer.questionId }
-        : best,
-    },
-  };
-}
-
-export function recordPracticeRun(progress: PlayerProgress, score: number, rounds: number): PlayerProgress {
-  if (rounds === 0) return progress;
-  return {
-    ...progress,
-    practice: {
-      ...progress.practice,
-      runsCompleted: progress.practice.runsCompleted + 1,
-      bestRunScore: Math.max(progress.practice.bestRunScore, score),
-      bestRunRounds: Math.max(progress.practice.bestRunRounds, rounds),
-    },
-  };
-}
-
 export function updateSettings(progress: PlayerProgress, patch: Partial<PlayerSettings>): PlayerProgress {
   return { ...progress, settings: { ...progress.settings, ...patch } };
 }
@@ -238,13 +210,13 @@ export class ProgressStore {
   private readonly listeners = new Set<() => void>();
   private readonly repository: ProgressRepository;
 
-  constructor(repository: ProgressRepository) {
+  constructor(repository: ProgressRepository, storageKey: string = STORAGE_KEY) {
     this.repository = repository;
     this.state = repository.load();
     if (typeof window !== 'undefined') {
       // Keep several open tabs in step.
       window.addEventListener('storage', (event) => {
-        if (event.key !== STORAGE_KEY) return;
+        if (event.key !== storageKey) return;
         this.state = this.repository.load();
         this.emit();
       });
@@ -274,6 +246,7 @@ export class ProgressStore {
 let store: ProgressStore | null = null;
 
 export function getProgressStore(): ProgressStore {
-  store ??= new ProgressStore(new LocalStorageProgressRepository());
+  const key = testDayOffset() === 0 ? STORAGE_KEY : TEST_STORAGE_KEY;
+  store ??= new ProgressStore(new LocalStorageProgressRepository(key), key);
   return store;
 }

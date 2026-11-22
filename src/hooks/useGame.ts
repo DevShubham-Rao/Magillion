@@ -3,7 +3,6 @@ import type {
   AnswerRecord,
   AnswerStatus,
   AnsweredCardSnapshot,
-  GameMode,
   GameView,
   Rejection,
   RevealState,
@@ -11,19 +10,13 @@ import type {
   RoundState,
 } from '../types/game';
 import type { QuestionDefinition, ScryfallCard } from '../types/mtg';
-import { drawPracticeQuestion, questionById, selectDailyQuestions } from '../data/questionPool';
+import { questionById, selectDailyQuestions } from '../data/questionPool';
 import { MAX_ATTEMPTS, ROUND_SECONDS, speedBonus } from '../data/gameRules';
 import { scryfall, ScryfallRequestError } from '../services/scryfallService';
 import { createDefaultScoringEngine, estimateObscurity } from '../services/scoringEngine';
 import { loadMetagame, peekMetagame } from '../services/metagame';
 import { resolveAnswer } from '../services/answerResolver';
-import {
-  getProgressStore,
-  recordDailyAnswer,
-  recordPracticeAnswer,
-  recordPracticeRun,
-  setDailyRoundState,
-} from '../services/progressStore';
+import { getProgressStore, recordDailyAnswer, setDailyRoundState } from '../services/progressStore';
 import { audioCues } from '../services/audioCues';
 import { displayManaCost, displayTypeLine, getImageUris, getOracleId } from '../lib/cardFaces';
 import { puzzleNumber, utcDateKey } from '../lib/dates';
@@ -66,7 +59,6 @@ function emptyAnswer(round: number, questionId: string, status: AnswerStatus): A
 }
 
 export interface GameController {
-  mode: GameMode;
   dateKey: string;
   puzzleNumber: number;
   questions: QuestionDefinition[];
@@ -90,24 +82,16 @@ export interface GameController {
   pass: () => void;
   advance: () => void;
   dismissRejection: () => void;
-  endPracticeRun: () => void;
-  restartPractice: () => void;
   startNewDay: () => void;
 }
 
-export function useGame(mode: GameMode): GameController {
-  const isDaily = mode === 'daily';
+export function useGame(): GameController {
   const progress = useProgress();
   const store = getProgressStore();
 
   const [dateKey, setDateKey] = useState(utcDateKey);
   const [liveDateKey, setLiveDateKey] = useState(utcDateKey);
   const seededQuestions = useMemo(() => selectDailyQuestions(dateKey), [dateKey]);
-
-  const [practiceQuestions, setPracticeQuestions] = useState<QuestionDefinition[]>(() => [drawPracticeQuestion()]);
-  const [practiceAnswers, setPracticeAnswers] = useState<AnswerRecord[]>([]);
-  const [practiceRound, setPracticeRound] = useState<RoundState | null>(null);
-  const [practiceEnded, setPracticeEnded] = useState(false);
 
   const [reveal, setReveal] = useState<RevealState | null>(null);
   const [loss, setLoss] = useState<RoundLoss | null>(null);
@@ -128,19 +112,16 @@ export function useGame(mode: GameMode): GameController {
     return stored.length === dailyRecord.questionIds.length ? stored : seededQuestions;
   }, [dailyRecord, seededQuestions]);
 
-  const questions = isDaily ? dailyQuestions : practiceQuestions;
+  const questions = dailyQuestions;
   const questionIds = useMemo(() => questions.map((q) => q.id), [questions]);
-  const answers = useMemo(
-    () => (isDaily ? (dailyRecord?.answers ?? []) : practiceAnswers),
-    [isDaily, dailyRecord, practiceAnswers],
-  );
+  const answers = useMemo(() => dailyRecord?.answers ?? [], [dailyRecord]);
   const roundIndex = answers.length;
   const roundNumber = roundIndex + 1;
   const currentQuestion = questions[roundIndex] ?? null;
   const totalScore = answers.reduce((sum, a) => sum + a.points, 0);
-  const complete = isDaily ? answers.length >= questions.length : practiceEnded;
+  const complete = answers.length >= questions.length;
 
-  const storedRound = isDaily ? (dailyRecord?.roundState ?? null) : practiceRound;
+  const storedRound = dailyRecord?.roundState ?? null;
   const activeRound = storedRound && storedRound.round === roundNumber ? storedRound : null;
   const roundRef = useRef(activeRound);
   roundRef.current = activeRound;
@@ -167,10 +148,9 @@ export function useGame(mode: GameMode): GameController {
   const saveRound = useCallback(
     (round: RoundState | null) => {
       roundRef.current = round;
-      if (isDaily) store.update((p) => setDailyRoundState(p, dateKey, questionIds, round));
-      else setPracticeRound(round);
+      store.update((p) => setDailyRoundState(p, dateKey, questionIds, round));
     },
-    [isDaily, store, dateKey, questionIds],
+    [store, dateKey, questionIds],
   );
 
   const startRound = useCallback(
@@ -192,10 +172,9 @@ export function useGame(mode: GameMode): GameController {
   /* ---------------------------------------------------------------- */
 
   useEffect(() => {
-    if (!isDaily) return;
     const id = window.setInterval(() => setLiveDateKey(utcDateKey()), 15_000);
     return () => window.clearInterval(id);
-  }, [isDaily]);
+  }, []);
 
   useEffect(() => {
     const untouched = !dailyRecord || (dailyRecord.answers.length === 0 && !dailyRecord.roundState);
@@ -215,15 +194,9 @@ export function useGame(mode: GameMode): GameController {
   const recordAnswer = useCallback(
     (answer: AnswerRecord) => {
       roundRef.current = null;
-      if (isDaily) {
-        store.update((p) => recordDailyAnswer(p, dateKey, questionIds, answer));
-      } else {
-        setPracticeRound(null);
-        setPracticeAnswers((list) => [...list, answer]);
-        store.update((p) => recordPracticeAnswer(p, answer));
-      }
+      store.update((p) => recordDailyAnswer(p, dateKey, questionIds, answer));
     },
-    [isDaily, store, dateKey, questionIds],
+    [store, dateKey, questionIds],
   );
 
   const loseRound = useCallback(
@@ -369,57 +342,21 @@ export function useGame(mode: GameMode): GameController {
     [currentQuestion, reveal, loss, answers, roundNumber, recordAnswer, saveRound, loseRound, setBusyState],
   );
 
-  const appendPracticeQuestion = useCallback(() => {
-    setPracticeQuestions((list) => [...list, drawPracticeQuestion(list.map((q) => q.id))]);
-  }, []);
-
   /** Moves on and starts the next clock straight away: the click is the "ready". */
   const advance = useCallback(() => {
     setReveal(null);
     setLoss(null);
     setRejection(null);
-    const next = answers.length + 1;
-    if (isDaily) {
-      if (answers.length < questions.length) startRound(next);
-    } else if (!practiceEnded) {
-      appendPracticeQuestion();
-      startRound(next);
-    }
-  }, [answers.length, isDaily, questions.length, practiceEnded, appendPracticeQuestion, startRound]);
+    if (answers.length < questions.length) startRound(answers.length + 1);
+  }, [answers.length, questions.length, startRound]);
 
   const pass = useCallback(() => {
     if (busyRef.current || !currentQuestion || reveal || loss) return;
     recordAnswer(emptyAnswer(roundNumber, currentQuestion.id, 'passed'));
     setRejection(null);
     const next = roundNumber + 1;
-    if (isDaily) {
-      if (next <= questions.length) startRound(next);
-    } else {
-      appendPracticeQuestion();
-      startRound(next);
-    }
-  }, [currentQuestion, reveal, loss, roundNumber, recordAnswer, isDaily, questions.length, appendPracticeQuestion, startRound]);
-
-  const endPracticeRun = useCallback(() => {
-    if (isDaily) return;
-    setReveal(null);
-    setLoss(null);
-    setRejection(null);
-    setPracticeRound(null);
-    setPracticeEnded(true);
-    const score = practiceAnswers.reduce((sum, a) => sum + a.points, 0);
-    store.update((p) => recordPracticeRun(p, score, practiceAnswers.length));
-  }, [isDaily, practiceAnswers, store]);
-
-  const restartPractice = useCallback(() => {
-    setPracticeQuestions([drawPracticeQuestion()]);
-    setPracticeAnswers([]);
-    setPracticeRound(null);
-    setPracticeEnded(false);
-    setReveal(null);
-    setLoss(null);
-    setRejection(null);
-  }, []);
+    if (next <= questions.length) startRound(next);
+  }, [currentQuestion, reveal, loss, roundNumber, recordAnswer, questions.length, startRound]);
 
   const startNewDay = useCallback(() => {
     const today = utcDateKey();
@@ -431,7 +368,6 @@ export function useGame(mode: GameMode): GameController {
   }, []);
 
   return {
-    mode,
     dateKey,
     puzzleNumber: puzzleNumber(dateKey),
     questions,
@@ -446,14 +382,12 @@ export function useGame(mode: GameMode): GameController {
     rejection,
     msRemaining,
     attemptsLeft,
-    newDayAvailable: isDaily && liveDateKey !== dateKey,
+    newDayAvailable: liveDateKey !== dateKey,
     beginRound,
     submitAnswer,
     pass,
     advance,
     dismissRejection: () => setRejection(null),
-    endPracticeRun,
-    restartPractice,
     startNewDay,
   };
 }
